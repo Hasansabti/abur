@@ -57,12 +57,18 @@
                 <p class="text-indigo-400 font-black text-[9px] uppercase tracking-[0.4em] italic mt-2 opacity-80">OBOUR ADMIN PRO</p>
             </div>
 
-            <form action="#" method="POST" @submit.prevent="loading = true; setTimeout(() => { window.location.href='/admin/verifications' }, 1200)" class="space-y-5">
+            <form action="{{ route('admin.auth.authenticate') }}" method="POST" @submit="loading = true" class="space-y-5">
+                @csrf
+                @if (session('error'))
+                    <div class="rounded-xl bg-red-500/10 border border-red-400/20 text-red-300 text-xs font-bold px-4 py-3">
+                        {{ session('error') }}
+                    </div>
+                @endif
 
                 <div class="group">
                     <label class="block text-[9px] font-black text-slate-500 uppercase mr-4 mb-2 italic tracking-widest">البريد الرسمي</label>
                     <div class="relative">
-                        <input type="email" name="email" required
+                        <input type="email" name="email" value="{{ old('email') }}" required
                                class="input-dark w-full rounded-2xl py-4 px-6 font-bold text-white placeholder-slate-600 transition-all outline-none italic text-sm"
                                placeholder="admin@obour.com">
                     </div>

@@ -24,10 +24,16 @@
                 <p class="text-slate-400 font-bold text-[10px] mt-3 uppercase tracking-[0.2em]">مرحباً بعودتك مجدداً</p>
             </div>
 
-            <form action="#" method="POST" class="space-y-5 relative">
+            <form action="{{ route('client.auth.authenticate') }}" method="POST" class="space-y-5 relative">
+                @csrf
+                @if ($errors->any())
+                    <div class="rounded-xl bg-red-50 text-red-700 text-xs font-bold px-4 py-3">
+                        {{ $errors->first() }}
+                    </div>
+                @endif
                 <div>
                     <label class="block text-[10px] font-black text-slate-400 uppercase mb-2 mr-2 italic">البريد الإلكتروني</label>
-                    <input type="email" name="email" placeholder="name@example.com" required
+                    <input type="email" name="email" value="{{ old('email') }}" placeholder="name@example.com" required
                         class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 text-sm focus:ring-4 focus:ring-indigo-100 outline-none transition-all">
                 </div>
 

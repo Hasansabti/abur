@@ -154,20 +154,31 @@ class AdminController extends Controller
 
         return view('admin.users.pending', compact('requests'));
     }
-    public function login(Request $request)
+    public function login()
     {
+        return view('admin.auth.login');
+    }
+
+    public function authenticate(Request $request)
+    {
+        $request->validate([
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
         $adminEmail = "admin@obour.com";
         $adminPass  = "123456";
 
         if ($request->email == $adminEmail && $request->password == $adminPass) {
             session(['is_admin' => true]);
-            return redirect()->route('admin.verifications');
+            return redirect()->route('admin.users.pending');
         }
 
         return back()->with('error', 'البيانات غير صحيحة!');
     }
     public function logout()
     {
-        return view('admin.auth.login');
+        session()->forget('is_admin');
+        return redirect()->route('admin.auth.login');
     }
 }

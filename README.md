@@ -57,3 +57,41 @@ If you discover a security vulnerability within Laravel, please send an e-mail t
 ## License
 
 The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+
+## Project API Backend
+
+This project now includes a JSON backend API for travel agencies, trips, and bookings.
+
+### API base path
+
+- `http://localhost:8000/api/v1`
+
+### Endpoints
+
+- `GET /health`
+- `GET /agencies`
+- `POST /agencies`
+- `GET /trips`
+- `POST /trips`
+- `GET /trips/{id}`
+- `PUT|PATCH /trips/{id}`
+- `DELETE /trips/{id}`
+- `GET /bookings`
+- `POST /bookings`
+- `GET /bookings/{id}`
+- `PATCH /bookings/{id}/status`
+
+### Setup with Laravel migrations
+
+1. Configure your DB in `.env`.
+2. Run:
+   - `php artisan migrate`
+
+### Setup with raw SQL
+
+- Import `database/sql/travel_api_schema.sql` into MySQL (8+).
+
+### Notes
+
+- Seat booking prevents duplicate seat numbers per trip.
+- Booking total amount is calculated automatically from `trip.price * number_of_seats`.

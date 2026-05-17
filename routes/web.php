@@ -15,6 +15,7 @@ use App\Http\Controllers\DriverController;
 Route::get('/', function () {
     return view('client.auth.login');
 });
+Route::post('/', [ClientController::class, 'authenticate'])->name('client.auth.authenticate');
 
 /*
 |--------------------------------------------------------------------------
@@ -47,7 +48,9 @@ Route::prefix('client')->name('client.')->group(function () {
     Route::get('/trip/{id}', [ClientController::class, 'show'])->name('trip.show');
     Route::get('/profile', [ClientController::class, 'profile'])->name('profile');
     Route::get('/login', [ClientController::class, 'login'])->name('auth.login');
+    Route::post('/login', [ClientController::class, 'authenticate'])->name('auth.authenticate');
     Route::get('/register', [ClientController::class, 'create'])->name('auth.regis');
+    Route::post('/register', [ClientController::class, 'register'])->name('auth.register');
 });
 
 /*
@@ -63,6 +66,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::get('/rejact', [AdminController::class, 'rerejectTrip'])->name('reject_trip');
     Route::get('/users/pending', [AdminController::class, 'identityRequests'])->name('users.pending');
     Route::get('/login', [AdminController::class, 'login'])->name('auth.login');
+    Route::post('/login', [AdminController::class, 'authenticate'])->name('auth.authenticate');
     Route::get('/logout', [AdminController::class, 'logout'])->name('auth.logout');
 });
 

@@ -40,18 +40,24 @@
                 </button>
             </div>
 
-            <form action="#" method="POST" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <form action="{{ route('client.auth.register') }}" method="POST" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                @csrf
+                @if ($errors->any())
+                    <div class="md:col-span-2 rounded-2xl bg-red-50 text-red-700 text-xs font-bold px-4 py-3">
+                        {{ $errors->first() }}
+                    </div>
+                @endif
                 {{-- الاسم --}}
                 <div class="md:col-span-1">
                     <label class="block text-[9px] font-black text-slate-400 uppercase mb-2 mr-2 italic">الاسم الكامل</label>
-                    <input type="text" name="name" placeholder="الاسم الثلاثي" required
+                    <input type="text" name="name" value="{{ old('name') }}" placeholder="الاسم الثلاثي" required
                         class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 text-sm focus:ring-4 focus:ring-indigo-100 outline-none transition-all">
                 </div>
 
                 {{-- البريد --}}
                 <div class="md:col-span-1">
                     <label class="block text-[9px] font-black text-slate-400 uppercase mb-2 mr-2 italic">البريد الإلكتروني</label>
-                    <input type="email" name="email" placeholder="mail@example.com" required
+                    <input type="email" name="email" value="{{ old('email') }}" placeholder="mail@example.com" required
                         class="w-full bg-slate-50 border-none rounded-2xl px-6 py-4 text-sm focus:ring-4 focus:ring-indigo-100 outline-none transition-all">
                 </div>
 
@@ -60,12 +66,12 @@
                     <div class="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-up">
                         <div>
                             <label class="block text-[9px] font-black text-indigo-500 uppercase mb-2 mr-2 italic">اسم الوكالة التجاري</label>
-                            <input type="text" name="agency_name" required
+                            <input type="text" name="agency_name" value="{{ old('agency_name') }}" required
                                 class="w-full bg-indigo-50/30 border border-indigo-100 rounded-2xl px-6 py-4 text-sm outline-none">
                         </div>
                         <div>
                             <label class="block text-[9px] font-black text-indigo-500 uppercase mb-2 mr-2 italic">رقم السجل التجاري</label>
-                            <input type="text" name="commercial_id" required
+                            <input type="text" name="commercial_id" value="{{ old('commercial_id') }}" required
                                 class="w-full bg-indigo-50/30 border border-indigo-100 rounded-2xl px-6 py-4 text-sm outline-none">
                         </div>
                     </div>
