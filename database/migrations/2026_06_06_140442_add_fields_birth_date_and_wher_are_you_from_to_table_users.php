@@ -1,0 +1,33 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            // إضافة حقل تاريخ الميلاد من نوع date
+            $table->date('birth_date')->nullable()->after('email');
+            
+            // إضافة حقل المدينة من نوع string
+            $table->string('city')->nullable()->after('birth_date');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            // حذف الحقول في حال تراجعك عن الـ Migration (Rollback)
+            $table->dropColumn(['birth_date', 'city']);
+        });
+    }
+};

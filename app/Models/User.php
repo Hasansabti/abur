@@ -3,15 +3,15 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use App\Notifications\CustomResetPasswordNotification;
+
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
     /**
@@ -22,7 +22,19 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'birth_date',
+        'city',
+        'avatar',
+        'id_image',
+        'is_verified',
+        'tour_seen',
         'password',
+        'phone',
+        'gender',
+        'national_id',
+        'birth_date_hijri',
+        'nationality_id',
+        'points_balance',
     ];
 
     /**
@@ -33,6 +45,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+
     ];
 
     /**
@@ -45,11 +58,39 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'tour_seen' => 'boolean',
         ];
+    }
+
+
+    /**
+     * إرسال إشعار استعادة كلمة المرور باللغة العربية
+     */
+    public function sendPasswordResetNotification($token)
+    {
+        $this->notify(new CustomResetPasswordNotification($token));
     }
 
     public function bookings(): HasMany
     {
         return $this->hasMany(Booking::class);
+    }
+    // public function sendPasswordResetNotification($token)
+    // {
+    //     $this->notify(new \Illuminate\Auth\Notifications\ResetPassword($token));
+    // }
+    public function companions()
+    {
+        return $this->hasMany(Companion::class);
+    }
+
+    public function nationality()
+    {
+        return $this->belongsTo(Nationality::class);
+    }
+
+    public function pointTransactions()
+    {
+        return $this->hasMany(CustomerPointTransaction::class, 'customer_id');
     }
 }

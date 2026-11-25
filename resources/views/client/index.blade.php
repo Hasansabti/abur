@@ -1,159 +1,226 @@
 @extends('layouts.client')
 
 @section('content')
-<div class="container mx-auto px-4 py-8 max-w-7xl" x-data="{ from: '', to: '', date: '', transportType: 'bus' }">
+    <style>
+        /* إظهار وإخفاء النصوص بناءً على لغة الصفحة التي تحددها أداة الترجمة */
+        html[lang="en"] .show-ar {
+            display: none !important;
+        }
 
-    {{-- 1. قسم الهيدر --}}
-    <div class="bg-gray-950 rounded-[3rem] p-12 mb-16 text-white shadow-3xl relative overflow-hidden ring-4 ring-gray-900/50 animate-fade-in">
-        <div class="absolute -right-20 -top-20 w-80 h-80 bg-blue-600 rounded-full blur-[100px] opacity-30"></div>
-        <div class="absolute -left-20 -bottom-20 w-80 h-80 bg-purple-600 rounded-full blur-[100px] opacity-30"></div>
+        html[lang="en"] .show-en {
+            display: inline-block !important;
+        }
 
-        <div class="relative z-10">
-            <h1 class="text-5xl font-black mb-6 tracking-tighter leading-tight">
-                ابدأ رحلتك <br> بضغطة زر.
-            </h1>
+        html[lang="ar"] .show-ar {
+            display: inline-block !important;
+        }
 
-            {{-- تبديل وسيلة النقل --}}
-            <div class="flex gap-2 mb-8 bg-gray-900/80 p-1.5 rounded-2xl w-fit border border-gray-800">
-                <button @click="transportType = 'bus'"
-                        :class="transportType === 'bus' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'"
-                        class="px-6 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2">
-                    <span>🚌</span> بري (باص)
-                </button>
-                <button @click="transportType = 'flight'"
-                        :class="transportType === 'flight' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'"
-                        class="px-6 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2">
-                    <span>✈️</span> طيران
-                </button>
+        html[lang="ar"] .show-en {
+            display: none !important;
+        }
+    </style>
+    <div class="w-full min-h-screen py-8 sm:py-12 relative bg-slate-50 font-['Tajawal'] overflow-hidden">
+
+        {{-- ================= خلفية خفيفة جداً (بدون فلاتر تسبب تعليق) ================= --}}
+        <div class="absolute inset-0 z-0 pointer-events-none">
+            {{-- الصورة الثابتة --}}
+            <div class="absolute inset-0 bg-cover bg-center lg:bg-right bg-no-repeat opacity-40 lg:opacity-100"
+                style="background-image: url('{{ asset('images/main.jpeg') }}');">
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 bg-gray-900/50 p-5 rounded-3xl border border-gray-800 backdrop-blur-sm">
-                <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700">
-                    <label class="block text-[10px] text-gray-500 font-bold uppercase mb-1.5 tracking-widest">مدينة المغادرة</label>
-                    <select x-model="from" class="w-full bg-transparent border-none text-white font-bold p-0 focus:ring-0 outline-none text-sm appearance-none">
-                        <option value="" class="bg-gray-900">اختر المدينة</option>
-                        <option class="bg-gray-900">الرياض</option>
-                        <option class="bg-gray-900">جدة</option>
-                    </select>
-                </div>
-                <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700">
-                    <label class="block text-[10px] text-gray-500 font-bold uppercase mb-1.5 tracking-widest">وجهة الوصول</label>
-                    <select x-model="to" class="w-full bg-transparent border-none text-white font-bold p-0 focus:ring-0 outline-none text-sm appearance-none">
-                        <option value="" class="bg-gray-900">اختر المدينة</option>
-                        <option class="bg-gray-900">مكة المكرمة</option>
-                        <option class="bg-gray-900">المدينة المنورة</option>
-                    </select>
-                </div>
-                <div class="bg-gray-800 rounded-2xl p-4 border border-gray-700">
-                    <label class="block text-[10px] text-gray-500 font-bold uppercase mb-1.5 tracking-widest">تاريخ السفر</label>
-                    <input type="date" x-model="date" class="w-full bg-transparent border-none text-white font-bold p-0 focus:ring-0 outline-none text-sm cursor-pointer">
-                </div>
-                <button class="bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 active:scale-95 disabled:bg-gray-700 disabled:opacity-50"
-                        :disabled="!from || !to || !date">
-                    ابحث الآن 🔍
-                </button>
+            {{-- تدرج لوني خفيف يغطي الصورة لضمان وضوح النص بدون استخدام blur ثقيل --}}
+            <div
+                class="absolute inset-0 bg-gradient-to-t from-slate-50 via-slate-50/90 to-slate-50/40 lg:bg-gradient-to-l lg:from-slate-50 lg:via-slate-50/95 lg:to-transparent">
             </div>
         </div>
-    </div>
 
-    {{-- 2. قائمة الرحلات المتاحة --}}
-    <div class="flex items-center justify-between mb-10">
-        <h2 class="text-3xl font-black text-gray-950 tracking-tight">الرحلات المتاحة</h2>
-        <div class="flex gap-2">
-            <span class="text-xs font-bold text-gray-400 bg-gray-50 px-4 py-2 rounded-full border">
-                يتم عرض رحلات الـ <span class="text-blue-600" x-text="transportType === 'bus' ? 'باص' : 'طيران'"></span>
-            </span>
-        </div>
-    </div>
+        {{-- ================= المحتوى ================= --}}
+        <div class="relative z-10 container mx-auto px-5 sm:px-6 max-w-7xl flex flex-col items-start" dir="rtl">
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-        @foreach($availableTrips as $trip)
-        <div x-show="transportType === '{{ $trip->transport_type }}'"
-             x-transition:enter="transition ease-out duration-300"
-             x-transition:enter-start="opacity-0 transform translate-y-4"
-             x-transition:enter-end="opacity-100 transform translate-y-0"
-             class="bg-white rounded-[2.5rem] overflow-hidden border border-gray-100 shadow-sm hover:shadow-2xl hover:border-blue-100 transition-all duration-300 group flex flex-col">
+            {{-- 1. النصوص الترحيبية --}}
+            <div class="text-right mb-10 max-w-2xl w-full animate-fade">
+                <!-- العنوان باللغة العربية -->
+                <h1
+                    class="show-ar text-4xl sm:text-5xl lg:text-7xl font-black text-slate-900 dark:text-slate-100 leading-[1.3] mb-5">
+                    رحلتك تبدأ <br>مع <span class="text-indigo-600 inline-block notranslate">عبور</span>
+                </h1>
 
-            {{-- قسم الصورة والعنوان العائم --}}
-            <div class="relative h-72 overflow-hidden">
-                <img src="{{ $trip->image }}" alt="{{ $trip->route }}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700">
+                <!-- العنوان باللغة الإنجليزية (مصمم ليكون مرتباً مع notranslate لمنع التداخل) -->
+                <h1
+                    class="show-en text-4xl sm:text-5xl lg:text-7xl font-black text-slate-900 dark:text-slate-100 leading-[1.3] mb-5 notranslate">
+                    Your Journey Starts <br>with <span class="text-indigo-600 inline-block">Abur</span>
+                </h1>
 
-                <div class="absolute inset-0 bg-gradient-to-t from-gray-950/90 via-gray-900/20 to-transparent"></div>
-
-                {{-- اسم الرحلة فوق الصورة --}}
-                <div class="absolute bottom-14 left-8 right-8">
-                    <h3 class="text-3xl font-black text-white drop-shadow-2xl tracking-tight leading-tight">
-                        {{ $trip->name }}
-                    </h3>
-                </div>
-
-                {{-- شارة نوع النقل --}}
-                <div class="absolute top-6 left-6 bg-gray-950 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest flex items-center gap-2 border border-white/10 shadow-2xl">
-                    @if($trip->transport_type == 'bus') 🚌 بري @else ✈️ طيران @endif
-                </div>
-
-                {{-- شارة ذهاب/عودة --}}
-                <div class="absolute top-6 right-6 bg-white/95 backdrop-blur-md px-4 py-2 rounded-full text-[11px] font-black text-blue-700 shadow-lg">
-                    {!! $trip->type == 'one_way' ? '📍 ذهاب فقط' : '🔄 ذهاب وعودة' !!}
-                </div>
-
-                {{-- التقييم --}}
-                <div class="absolute bottom-6 left-8 bg-blue-600 px-4 py-1.5 rounded-full text-white text-xs font-black shadow-lg ring-4 ring-white/10">
-                    ⭐ {{ $trip->rating }}.0
+                {{-- صندوق نصوص بلون سادة (بدون شفافية زجاجية ثقيلة) --}}
+                <div class="bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-3">
+                    <p class="text-lg sm:text-xl md:text-2xl text-slate-800 font-bold leading-snug">
+                        منصة ذكية تجمع أفضل وكالات السفر والرحلات في مكان واحد.
+                    </p>
+                    <p class="text-base sm:text-lg text-slate-600 font-medium leading-relaxed">
+                        حجز آمن بالكامل • رحلات مجدولة ومنظمة بدقة • خيارات متعددة تتناسب مع وجهتك القادمة.
+                    </p>
                 </div>
             </div>
 
-            {{-- قسم التفاصيل السفلية --}}
-            <div class="p-8 flex-grow flex flex-col justify-between">
-                <div>
-                    <div class="flex justify-between items-start mb-6">
-                        <div>
-                            <p class="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-1">{{ $trip->agency }}</p>
-                            <h1 class="text-xl text-blue-700 font-bold ">{{ $trip->route }}</h1>
-                            <p class="text-sm text-gray-500 font-bold italic">{{ $trip->vehicle_model }}</p>
-                            <div class="flex items-center gap-4 mt-3">
-                                <span class="text-xs text-blue-600 font-black flex items-center gap-1.5 bg-blue-50 px-3 py-1 rounded-lg">
-                                    <span>📅</span> {{ $trip->date }}
-                                </span>
-                            </div>
-                        </div>
-                        <div class="text-left bg-slate-50 px-5 py-3 rounded-2xl border border-slate-100 group-hover:bg-blue-50 group-hover:border-blue-100 transition-colors">
-                            <p class="text-[10px] text-gray-400 font-bold mb-1">يبدأ من</p>
-                            <p class="text-3xl font-black text-gray-900 group-hover:text-blue-600">{{ $trip->price }} <small class="text-[10px] font-bold">ر.س</small></p>
-                        </div>
-                    </div>
+            {{-- 2. أزرار التنقل الرئيسية --}}
+            <div class="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto mb-14 animate-fade delay-100">
+                {{-- الزر الأساسي --}}
+                <a href="{{ route('client.trips') }}"
+                    class="w-full sm:w-auto px-8 py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-lg text-center rounded-xl shadow-lg shadow-indigo-200 transition-colors flex items-center justify-center gap-3 group">
+                    <span>استكشف الرحلات الحالية</span>
+                    <svg class="w-6 h-6 transform group-hover:-translate-x-1 transition-transform" fill="none"
+                        stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
+                            d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </a>
 
-                    <div class="flex gap-2 mb-8 flex-wrap">
-                        @foreach($trip->amenities as $amenity)
-                            <span class="text-[9px] bg-slate-50 text-slate-500 px-3 py-1.5 rounded-lg font-black border border-slate-100 uppercase tracking-tighter">
-                                {{ $amenity }}
-                            </span>
-                        @endforeach
-                    </div>
-                </div>
-
-                {{-- زر الحجز التفاعلي --}}
-                <a href="{{ route('client.select_seat', $trip->id) }}"
-                   class="block w-full text-center py-5 bg-gray-950 hover:bg-blue-600 text-white rounded-2xl font-black text-lg transition-all shadow-xl shadow-gray-200 active:scale-95 group-hover:shadow-blue-600/30 group-hover:-translate-y-1">
-                   @if($trip->transport_type == 'bus') اختيار المقعد @else استكمال الحجز @endif
+                {{-- الزر الثانوي --}}
+                <a href="{{ route('client.agency.agencies') }}"
+                    class="w-full sm:w-auto px-8 py-4 bg-white hover:bg-slate-50 text-slate-800 font-bold text-lg text-center rounded-xl border-2 border-slate-200 shadow-sm transition-colors flex items-center justify-center gap-3">
+                    <span>تواصل مع الوكالات</span>
+                    <span class="text-xl">🏢</span>
                 </a>
             </div>
-        </div>
-        @endforeach
-    </div>
-</div>
 
-<style>
-    .animate-fade-in {
-        animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    ::-webkit-scrollbar { width: 8px; }
-    ::-webkit-scrollbar-track { background: #f8fafc; }
-    ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-    ::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
-</style>
+            {{-- 3. كروت الميزات الأربعة (تصميم نظيف وسريع) --}}
+            <div
+                class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 w-full max-w-7xl mb-14 animate-fade delay-200">
+
+                {{-- كرت: دعم --}}
+                <div
+                    class="bg-white p-5 sm:p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex items-start gap-4 text-right">
+                    <div
+                        class="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center text-2xl shrink-0">
+                        📞</div>
+                    <div>
+                        <h4 class="font-bold text-slate-800 text-lg">دعم متواصل</h4>
+                        <p class="text-sm sm:text-base text-slate-500 mt-1 leading-relaxed">فريق في خدمتك للإجابة على
+                            استفساراتك.</p>
+                    </div>
+                </div>
+
+                {{-- كرت: شركاء موثوقين --}}
+                <div
+                    class="bg-white p-5 sm:p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex items-start gap-4 text-right">
+                    <div
+                        class="w-12 h-12 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center text-2xl shrink-0">
+                        🤝</div>
+                    <div>
+                        <h4 class="font-bold text-slate-800 text-lg">شركاء موثوقين</h4>
+                        <p class="text-sm sm:text-base text-slate-500 mt-1 leading-relaxed">نعمل مع أفضل وكالات النقل
+                            المرخصة.</p>
+                    </div>
+                </div>
+
+                {{-- كرت: رحلات منظمة --}}
+                <div
+                    class="bg-white p-5 sm:p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex items-start gap-4 text-right">
+                    <div
+                        class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center text-2xl shrink-0">
+                        📅</div>
+                    <div>
+                        <h4 class="font-bold text-slate-800 text-lg">رحلات منظمة</h4>
+                        <p class="text-sm sm:text-base text-slate-500 mt-1 leading-relaxed">مواعيد انطلاق دقيقة وجداول مرنة.
+                        </p>
+                    </div>
+                </div>
+
+                {{-- كرت: جودة الخدمة --}}
+                <div
+                    class="bg-white p-5 sm:p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow flex items-start gap-4 text-right">
+                    <div
+                        class="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center text-2xl shrink-0">
+                        ⭐</div>
+                    <div>
+                        <h4 class="font-bold text-slate-800 text-lg">جودة الخدمة</h4>
+                        <p class="text-sm sm:text-base text-slate-500 mt-1 leading-relaxed">تجربة حجز سلسة تضمن لك جودة
+                            وراحة.</p>
+                    </div>
+                </div>
+
+            </div>
+
+            {{-- 4. السلايدر (تم تخفيف حركاته ليكون أسرع على المتصفح) --}}
+            <div x-data="{
+                activeSlide: 0,
+                slides: [
+                    { src: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1200&q=80', title: 'اكتشف وجهاتنا الساحلية', desc: 'استمتع بأجمل الشواطئ الهادئة والاسترخاء المثالي.' },
+                    { src: 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?auto=format&fit=crop&w=1200&q=80', title: 'خطط لرحلتك بكل ثقة', desc: 'كل ما تحتاجه لتبدأ مغامرتك الجديدة بأمان.' },
+                    { src: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1200&q=80', title: 'عروض حصرية', desc: 'أسعار تنافسية توفر لك رحلة مريحة لا تُنسى.' }
+                ],
+                next() { this.activeSlide = (this.activeSlide + 1) % this.slides.length },
+                prev() { this.activeSlide = (this.activeSlide - 1 + this.slides.length) % this.slides.length }
+            }" x-init="setInterval(() => next(), 5000)"
+                class="relative w-full max-w-7xl h-[300px] sm:h-[400px] lg:h-[500px] rounded-2xl overflow-hidden shadow-lg bg-slate-900 group mb-10 animate-fade delay-300">
+
+                <div class="relative w-full h-full flex transition-transform duration-700 ease-in-out"
+                    :style="`transform: translateX(${activeSlide * 100}%)`" dir="rtl">
+                    <template x-for="(slide, index) in slides" :key="index">
+                        <div class="w-full h-full flex-shrink-0 relative">
+                            <img :src="slide.src" class="w-full h-full object-cover" alt="Slide Image" loading="lazy">
+
+                            {{-- طبقة تظليل بسيطةوفعالة --}}
+                            <div
+                                class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex flex-col justify-end p-6 sm:p-10 text-right">
+                                <span
+                                    class="bg-indigo-600 text-white font-bold text-sm px-3 py-1 rounded-full w-max mb-3">وجهات
+                                    عبور</span>
+                                <h2 class="text-white text-2xl sm:text-4xl font-black mb-2" x-text="slide.title"></h2>
+                                <p class="text-slate-200 text-base sm:text-lg max-w-2xl" x-text="slide.desc"></p>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                {{-- أزرار تحكم بسيطة --}}
+                <button @click="prev()"
+                    class="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/20 hover:bg-white text-white hover:text-slate-900 rounded-full flex items-center justify-center transition-colors backdrop-blur-sm">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </button>
+                <button @click="next()"
+                    class="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 bg-white/20 hover:bg-white text-white hover:text-slate-900 rounded-full flex items-center justify-center transition-colors backdrop-blur-sm">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                </button>
+            </div>
+
+        </div>
+    </div>
+
+    {{-- ================= التنسيقات خفيفة الوزن ================= --}}
+    <style>
+        /* حركة دخول سريعة ونظيفة لا تستهلك الموارد */
+        .animate-fade {
+            opacity: 0;
+            animation: fastFadeIn 0.5s ease-out forwards;
+        }
+
+        .delay-100 {
+            animation-delay: 0.1s;
+        }
+
+        .delay-200 {
+            animation-delay: 0.2s;
+        }
+
+        .delay-300 {
+            animation-delay: 0.3s;
+        }
+
+        @keyframes fastFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
 @endsection

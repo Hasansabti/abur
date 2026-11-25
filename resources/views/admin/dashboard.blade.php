@@ -1,180 +1,494 @@
 @extends('layouts.admin')
 
 @section('content')
-<div class="container mx-auto px-4 py-8" x-data="{ activeTab: 'pending' }">
+    <div class="container mx-auto px-4 py-8" x-data="{ activeTab: 'pending' }">
 
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
-        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 relative overflow-hidden group">
-            <div class="absolute right-0 top-0 h-full w-2 bg-blue-600"></div>
-            <p class="text-slate-400 text-[10px] font-black uppercase tracking-widest">إجمالي المبيعات</p>
-            <p class="text-3xl font-black text-slate-800 mt-1">45,200 <small class="text-xs text-slate-400 font-bold">ر.س</small></p>
-            <div class="mt-4 flex items-center gap-1 text-[10px] font-bold text-green-500 bg-green-50 w-fit px-2 py-1 rounded-lg">
-                <span>↑ 12%</span>
+        <!-- هيدر ترحيبي علوي -->
+        <div
+            class="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b border-slate-100 pb-6">
+            <div>
+                <h1 class="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
+                    <span class="text-blue-600">📊</span> لوحة الإشراف والمتابعة
+                </h1>
+                <p class="text-sm text-slate-500 font-semibold mt-1">مرحباً بك مجدداً! إليك حالة حركة الحجوزات والوكالات في
+                    منصة عُبور اليوم.</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span
+                    class="text-xs bg-green-50 text-green-700 px-4 py-2 rounded-xl font-bold flex items-center gap-2 border border-green-100 shadow-sm">
+                    <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> النظام مستقر
+                </span>
+                <span
+                    class="text-xs bg-white text-slate-500 px-4 py-2 rounded-xl font-bold border border-slate-200/60 shadow-sm">
+                    📅 {{ now()->format('Y-m-d') }}
+                </span>
             </div>
         </div>
 
-        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 group">
-            <p class="text-slate-400 text-[10px] font-black uppercase tracking-widest">الوكالات النشطة</p>
-            <div class="flex items-end justify-between">
-                <p class="text-3xl font-black text-slate-800 mt-1">24</p>
-                <span class="text-[10px] font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">3 طلبات انضمام</span>
-            </div>
-        </div>
+        <!-- كروت الإحصائيات العلوية المستندة بالكامل على بياناتك الفعلية -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
 
-        <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 group">
-            <p class="text-slate-400 text-[10px] font-black uppercase tracking-widest">الرحلات النشطة</p>
-            <p class="text-3xl font-black text-slate-800 mt-1">156</p>
-            <div class="mt-4 flex items-center gap-1 text-[10px] font-bold text-orange-500">
-                <span class="w-2 h-2 bg-orange-500 rounded-full animate-ping"></span> 8 بانتظار الاعتماد
-            </div>
-        </div>
-
-        <div class="bg-slate-900 p-6 rounded-[2rem] shadow-xl text-white">
-            <p class="text-slate-500 text-[10px] font-black uppercase tracking-widest">المستخدمين أونلاين</p>
-            <p class="text-3xl font-black mt-1">1,840</p>
-            <div class="mt-4 flex -space-x-2 space-x-reverse">
-                <div class="w-6 h-6 rounded-full border-2 border-slate-900 bg-blue-500"></div>
-                <div class="w-6 h-6 rounded-full border-2 border-slate-900 bg-purple-500"></div>
-                <div class="w-6 h-6 rounded-full border-2 border-slate-900 bg-slate-700 flex items-center justify-center text-[8px] font-bold">+40</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
-
-        {{-- الجزء الأيسر: إدارة الرحلات والوكالات --}}
-        <div class="lg:col-span-8 space-y-8">
-
-            {{-- تبديلات التحكم --}}
-            <div class="flex gap-4 border-b border-slate-100 pb-2">
-                <button @click="activeTab = 'pending'" :class="activeTab === 'pending' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-400'" class="pb-2 px-4 font-black text-sm transition-all">رحلات بانتظار الاعتماد</button>
-                <button @click="activeTab = 'agencies'" :class="activeTab === 'agencies' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-400'" class="pb-2 px-4 font-black text-sm transition-all">طلبات الوكالات</button>
-            </div>
-
-            <div x-show="activeTab === 'pending'" class="space-y-4 animate-fade-in">
-                {{-- بطاقة رحلة بانتظار الاعتماد --}}
-                <div class="bg-white rounded-[2rem] p-6 border border-slate-100 hover:shadow-lg transition-all flex flex-col md:flex-row justify-between items-center gap-6">
-                    <div class="flex items-center gap-4">
-                        <div class="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-3xl">🚍</div>
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <h4 class="font-black text-slate-800">وكالة الفارس - رحلة مكة</h4>
-                                <span class="text-[9px] bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-bold">عاجل</span>
-                            </div>
-                            <p class="text-xs text-slate-400 font-bold mt-1 uppercase tracking-tighter">الرياض ⬅️ مكة المكرمة</p>
-                            <div class="flex items-center gap-3 mt-2">
-                                <span class="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-lg">150 ر.س / مقعد</span>
-                                <span class="text-[10px] font-black text-slate-500">📅 25 رمضان</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="flex gap-2 w-full md:w-auto">
-                        <button class="flex-1 md:flex-none px-6 py-3 bg-slate-50 text-slate-400 rounded-xl text-xs font-black hover:bg-red-50 hover:text-red-500 transition-all">رفض</button>
-                        <button class="flex-1 md:flex-none px-8 py-3 bg-blue-600 text-white rounded-xl text-xs font-black shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all">اعتماد الرحلة</button>
-                    </div>
-                </div>
-            </div>
-
-            {{-- قسم الدعم الفني السريع --}}
-            <div class="bg-white rounded-[3rem] p-8 border border-slate-100 shadow-sm">
-                <h2 class="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">
-                    <span class="p-2 bg-purple-100 text-purple-600 rounded-xl text-sm">🎫</span> أحدث تذاكر الدعم
-                </h2>
-                <div class="divide-y divide-slate-50">
-                    <div class="py-4 flex justify-between items-center">
-                        <div class="flex items-center gap-3">
-                            <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-                            <div>
-                                <p class="text-sm font-black text-slate-700">مشكلة في استعادة كلمة المرور</p>
-                                <p class="text-[10px] text-slate-400 font-bold">بواسطة: محمد علي - منذ 10 دقائق</p>
-                            </div>
-                        </div>
-                        <button class="text-[10px] font-black text-blue-600 hover:underline">رد الآن</button>
-                    </div>
-                    <div class="py-4 flex justify-between items-center">
-                        <div class="flex items-center gap-3">
-                            <div class="w-2 h-2 bg-slate-200 rounded-full"></div>
-                            <div>
-                                <p class="text-sm font-black text-slate-700 italic opacity-50">تأكيد عملية دفع معلقة</p>
-                                <p class="text-[10px] text-slate-400 font-bold">بواسطة: وكالة النور - منذ ساعتين</p>
-                            </div>
-                        </div>
-                        <span class="text-[9px] font-black text-slate-300 uppercase">تم الرد</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {{-- الجزء الأيمن: الإعدادات والأدوات --}}
-        <div class="lg:col-span-4 space-y-6">
-
-            {{-- التحكم في العمولات --}}
-            <div class="bg-slate-900 rounded-[2.5rem] p-8 text-white shadow-2xl relative overflow-hidden">
-                <div class="absolute -right-4 -top-4 w-20 h-20 bg-blue-600/20 rounded-full blur-2xl"></div>
-                <h3 class="text-lg font-black mb-6 flex items-center gap-2">
-                    <span class="text-blue-500">💰</span> النظام المالي
-                </h3>
-                <div class="space-y-6">
+            <!-- كارت الوكالات النشطة -->
+            <div
+                class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all duration-300">
+                <div class="flex justify-between items-start">
                     <div>
-                        <label class="text-[10px] text-slate-400 font-black uppercase mb-2 block">عمولة المنصة على التذكرة (%)</label>
-                        <div class="flex items-center gap-4">
-                            <input type="range" min="1" max="20" value="5" class="flex-grow accent-blue-600">
-                            <span class="text-xl font-black text-blue-500">5%</span>
-                        </div>
+                        <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">الوكالات المعتمدة</p>
+                        <p class="text-3xl font-black text-slate-800 mt-2">{{ $activeAgenciesCount }}</p>
                     </div>
-                    <div class="p-4 bg-white/5 rounded-2xl border border-white/10">
-                        <div class="flex justify-between items-center mb-2">
-                            <span class="text-xs font-bold text-slate-300">رسوم تسجيل الوكالات</span>
-                            <div class="w-10 h-5 bg-blue-600 rounded-full relative">
-                                <div class="absolute right-1 top-1 w-3 h-3 bg-white rounded-full"></div>
-                            </div>
-                        </div>
-                        <p class="text-[9px] text-slate-500 font-bold italic">يتم تحصيل 500 ريال عند تفعيل حساب أي وكالة جديدة.</p>
-                    </div>
-                    <button class="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-xs hover:bg-blue-700 transition-all shadow-xl shadow-blue-900/50">
-                        حفظ الإعدادات المالية
-                    </button>
+                    <div class="p-3 bg-indigo-50 text-indigo-600 rounded-xl font-bold text-xl">🏢</div>
+                </div>
+                <div class="mt-4 flex items-center gap-1.5 text-xs font-bold text-slate-500">
+                    <span class="w-1.5 h-1.5 bg-indigo-500 rounded-full"></span>
+                    <span>شركاء نجاح منصة عبور</span>
                 </div>
             </div>
 
-            {{-- اقتراحات الذكاء الاصطناعي/النظام --}}
-            <div class="bg-blue-50 p-6 rounded-[2.5rem] border border-blue-100 relative group overflow-hidden">
-                <div class="absolute -left-2 -bottom-2 text-6xl opacity-5 group-hover:rotate-12 transition-transform">💡</div>
-                <h3 class="text-sm font-black text-blue-800 mb-3 flex items-center gap-2">نصيحة النظام</h3>
-                <p class="text-xs text-blue-600 leading-relaxed font-bold">
-                    تم رصد ضغط كبير على مسار <span class="underline">الرياض - مكة</span>. ننصح الوكالات بزيادة عدد الرحلات في العشر الأواخر.
-                </p>
-                <button class="mt-4 w-full py-2 bg-white text-blue-600 border border-blue-200 rounded-xl text-[10px] font-black hover:bg-blue-600 hover:text-white transition-all">
-                    إرسال تنبيه للوكالات 📣
-                </button>
+            <!-- كارت الرحلات المعتمدة -->
+            <div
+                class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all duration-300">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">الرحلات النشطة حالياً</p>
+                        <p class="text-3xl font-black text-slate-800 mt-2">{{ $activeTripsCount }}</p>
+                    </div>
+                    <div class="p-3 bg-emerald-50 text-emerald-600 rounded-xl font-bold text-xl">🚍</div>
+                </div>
+                <div class="mt-4 flex items-center gap-1.5 text-xs font-bold text-emerald-600">
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                    <span>متاحة للحجز المباشر الآن</span>
+                </div>
             </div>
 
-            {{-- سجل العمليات السريع --}}
-            <div class="p-6">
-                <h3 class="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest">آخر النشاطات</h3>
-                <div class="space-y-4">
-                    <div class="flex gap-3">
-                        <div class="w-1 h-8 bg-slate-200 rounded-full"></div>
-                        <div>
-                            <p class="text-[11px] font-black text-slate-700">قام الأدمن "سعد" بتغيير نسبة العمولات</p>
-                            <p class="text-[9px] text-slate-400 font-bold italic">منذ 3 ساعات</p>
+            <!-- كارت الإجراءات المعلقة -->
+            <div
+                class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-all duration-300 relative overflow-hidden">
+                @if ($pendingTripsCount + $pendingAgenciesCount > 0)
+                    <div class="absolute right-0 top-0 h-full w-1.5 bg-amber-500"></div>
+                @endif
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">طلبات بانتظار المراجعة</p>
+                        <p class="text-3xl font-black text-slate-800 mt-2">{{ $pendingTripsCount + $pendingAgenciesCount }}
+                        </p>
+                    </div>
+                    <div class="p-3 bg-amber-50 text-amber-600 rounded-xl font-bold text-xl">⏳</div>
+                </div>
+                <div class="mt-4 flex items-center justify-between text-xs font-bold text-slate-500">
+                    <span>رحلات: {{ $pendingTripsCount }}</span>
+                    <span class="text-slate-300">•</span>
+                    <span>وكالات: {{ $pendingAgenciesCount }}</span>
+                </div>
+            </div>
+
+            <!-- كارت المتصلين الآن -->
+            <div
+                class="bg-slate-900 p-6 rounded-2xl shadow-lg text-white relative overflow-hidden group hover:bg-slate-850 transition-all duration-300">
+                <div class="absolute -right-6 -bottom-6 w-24 h-24 bg-blue-600/10 rounded-full blur-xl"></div>
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs font-bold uppercase tracking-wider"> المستخدمين</p>
+                        <p class="text-3xl font-black mt-2 tracking-tight">{{ number_format($onlineUsersCount) }}</p>
+                    </div>
+                    <div class="p-3 bg-white/10 text-emerald-400 rounded-xl text-xl animate-pulse">🟢</div>
+                </div>
+                <div class="mt-4 flex items-center justify-between border-t border-white/5 pt-3">
+                    <div class="flex -space-x-2 space-x-reverse">
+                        <div class="w-6 h-6 rounded-full border-2 border-slate-900 bg-blue-500"></div>
+                        <div class="w-6 h-6 rounded-full border-2 border-slate-900 bg-purple-500"></div>
+                    </div>
+                    <span class="text-[11px] font-bold text-slate-400">مراقبة حية للنشاط</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- الجزء الرئيسي للوحة التحكم  -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+
+            {{-- الجزء الأيمن (8 أعمدة): طلبات الاعتماد وإدارة المحتوى والـ Logs --}}
+            <div class="lg:col-span-8 space-y-8">
+
+                {{-- أزرار التبديل  باستخدام --}}
+                <div class="bg-white p-2 rounded-xl border border-slate-100 shadow-sm flex flex-wrap gap-2">
+                    <button @click="activeTab = 'pending'"
+                        :class="activeTab === 'pending' ? 'bg-blue-600 text-white shadow-md' :
+                            'text-slate-600 hover:bg-slate-50'"
+                        class="flex-1 py-3 px-4 rounded-lg font-bold text-sm transition-all duration-200 relative flex items-center justify-center gap-2">
+                        <span>🚌 رحلات معلقة</span>
+                        @if ($pendingTripsCount > 0)
+                            <span
+                                class="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black animate-bounce">
+                                {{ $pendingTripsCount }}
+                            </span>
+                        @endif
+                    </button>
+
+                    <button @click="activeTab = 'agencies'"
+                        :class="activeTab === 'agencies' ? 'bg-blue-600 text-white shadow-md' :
+                            'text-slate-600 hover:bg-slate-50'"
+                        class="flex-1 py-3 px-4 rounded-lg font-bold text-sm transition-all duration-200 relative flex items-center justify-center gap-2">
+                        <span>🏢 طلبات الوكالات</span>
+                        @if ($pendingAgenciesCount > 0)
+                            <span class="bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black">
+                                {{ $pendingAgenciesCount }}
+                            </span>
+                        @endif
+                    </button>
+                    <!-- زر تبويب توثيق هويات المستخدمين -->
+                    <button @click="activeTab = 'users'"
+                        :class="activeTab === 'users' ? 'bg-blue-600 text-white shadow-md' :
+                            'text-slate-600 hover:bg-slate-50'"
+                        class="flex-1 py-3 px-4 rounded-lg font-bold text-sm transition-all duration-200 relative flex items-center justify-center gap-2">
+                        <span>🪪 توثيق الهويات</span>
+                        @php
+                            $pendingUsersCount = isset($pendingUsers)
+                                ? $pendingUsers->count()
+                                : (isset($users)
+                                    ? $users->where('is_verified', 3)->count()
+                                    : 0);
+                        @endphp
+                        @if ($pendingUsersCount > 0)
+                            <span
+                                class="bg-amber-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black animate-pulse">
+                                {{ $pendingUsersCount }}
+                            </span>
+                        @endif
+                    </button>
+
+                    <!-- زر تبويب سجلات الإزاحة  -->
+                    {{-- <button @click="activeTab = 'logs'"
+                        :class="activeTab === 'logs' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-50'"
+                        class="flex-1 py-3 px-4 rounded-lg font-bold text-sm transition-all duration-200 relative flex items-center justify-center gap-2">
+                        <span>🔄 سجلات إزاحة المقاعد</span>
+                    </button> --}}
+                </div>
+
+                {{-- محتوى تبويب: رحلات بانتظار الاعتماد --}}
+                <div x-show="activeTab === 'pending'" class="space-y-4 animate-fade-in">
+                    @forelse($pendingTrips as $trip)
+                        <div
+                            class="bg-white rounded-2xl p-6 border border-slate-100 hover:border-blue-100 hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                            <div class="flex items-start gap-4">
+                                <div
+                                    class="w-14 h-14 bg-gradient-to-br from-slate-50 to-slate-100 border border-slate-200/60 rounded-xl flex items-center justify-center text-2xl shadow-sm">
+                                    {{ $trip->transport_type == 'flight' ? '✈️' : '🚍' }}
+                                </div>
+                                <div class="space-y-1">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <span
+                                            class="w-8 h-8 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center text-sm">
+                                            🏢
+                                        </span>
+                                        <h4 class="font-black text-slate-800 text-base">
+                                            مالك الوكالة:
+                                            <span
+                                                class="text-blue-600">{{ $trip->agency->name ?? 'وكالة غير معروفة' }}</span>
+                                        </h4>
+                                    </div>
+                                    <p class="text-sm font-bold text-slate-700">{{ $trip->title }}</p>
+
+                                    <div class="flex items-center gap-2 text-xs font-semibold text-slate-500 pt-1">
+                                        <span
+                                            class="bg-slate-100 px-2 py-0.5 rounded text-slate-700">{{ $trip->from_city }}</span>
+                                        <span class="text-slate-300">⬅️</span>
+                                        <span
+                                            class="bg-slate-100 px-2 py-0.5 rounded text-slate-700">{{ $trip->to_city }}</span>
+                                    </div>
+
+                                    <div class="flex items-center gap-4 mt-3 flex-wrap">
+                                        <span
+                                            class="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100/50">
+                                            {{ number_format($trip->price) }} ر.س
+                                        </span>
+                                        <span class="text-xs font-bold text-slate-500 flex items-center gap-1">
+                                            📅 {{ \Carbon\Carbon::parse($trip->date)->format('Y-m-d') }}
+                                        </span>
+                                        <span
+                                            class="text-xs font-bold text-purple-600 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-100/50">
+                                            💺 إجمالي المقاعد: {{ $trip->total_seats }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex gap-2 w-full md:w-auto border-t md:border-t-0 pt-4 md:pt-0">
+
+                                <a href="{{ route('admin.trips.approveTrip', ['id' => $trip->id]) }}"
+                                    class="text-center flex-1 md:flex-none px-6 py-2.5 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-sm hover:bg-blue-700 transition-all">
+                                    اعتماد ونشر
+                                </a>
+                            </div>
+                        </div>
+                    @empty
+                        <div
+                            class="text-center py-16 bg-white rounded-2xl border border-slate-100 text-slate-400 font-bold text-sm shadow-sm">
+                            <p class="text-3xl mb-2">🎉</p>
+                            لا توجد أي رحلات معلقة بانتظار الاعتماد حالياً.
+                        </div>
+                    @endforelse
+                </div>
+
+                {{-- محتوى تبويب: طلبات الوكالات --}}
+                <div x-show="activeTab === 'agencies'" class="space-y-4 animate-fade-in" x-cloak>
+                    @forelse($pendingAgencies as $agency)
+                        <div
+                            class="bg-white rounded-2xl p-6 border border-slate-100 hover:border-indigo-100 hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                            <div class="flex items-center gap-4">
+                                <div
+                                    class="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center text-2xl font-bold shadow-sm border border-indigo-100/60">
+                                    🏢
+                                </div>
+                                <div class="space-y-1">
+                                    <h4 class="font-black text-slate-800 text-base">{{ $agency->name }}</h4>
+                                    <p class="text-xs font-bold text-slate-500 bg-slate-100 w-fit px-2 py-0.5 rounded">
+                                        السجل التجاري: {{ $agency->commercial_id ?? 'غير متوفر' }}
+                                    </p>
+                                    <p class="text-xs text-slate-400 font-semibold flex items-center gap-1 pt-1">
+                                        ⏱️ تقديم الطلب: {{ $agency->created_at->diffForHumans() }}
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="flex gap-2 w-full md:w-auto border-t md:border-t-0 pt-4 md:pt-0">
+                                <form action="{{ route('admin.agencies.approve', $agency->id) }}" method="POST"
+                                    class="w-full md:w-auto">
+                                    @csrf
+                                    <button type="submit"
+                                        class="text-center w-full md:w-auto px-6 py-2.5 bg-green-600 text-white rounded-xl text-xs font-bold shadow-sm hover:bg-green-700 transition-all flex items-center justify-center gap-1">
+                                        ✅ تفعيل الحساب
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    @empty
+                        <div
+                            class="text-center py-16 bg-white rounded-2xl border border-slate-100 text-slate-400 font-bold text-sm shadow-sm">
+                            <p class="text-3xl mb-2">🤝</p>
+                            لا توجد طلبات انضمام جديدة معلقة من وكالات السفر.
+                        </div>
+                    @endforelse
+                </div>
+                {{-- محتوى تبويب: طلبات توثيق هويات المستخدمين (is_verified = 3) --}}
+                <div x-show="activeTab === 'users'" class="space-y-4 animate-fade-in" x-cloak>
+                    @php
+                        $usersToVerify = isset($pendingUsers)
+                            ? $pendingUsers
+                            : (isset($users)
+                                ? $users->where('is_verified', 3)
+                                : []);
+                    @endphp
+
+                    @forelse($usersToVerify as $user)
+                        <div
+                            class="bg-white rounded-2xl p-6 border border-slate-100 hover:border-amber-100 hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                            <div class="flex items-center gap-4">
+                                <div
+                                    class="w-14 h-14 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center text-2xl font-bold shadow-sm border border-amber-100/60">
+                                    🪪
+                                </div>
+                                <div class="space-y-1">
+                                    <div class="flex items-center gap-2">
+                                        <h4 class="font-black text-slate-800 text-base">{{ $user->name }}</h4>
+                                        <span
+                                            class="bg-amber-100 text-amber-700 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                                            بانتظار الاعتماد
+                                        </span>
+                                    </div>
+                                    <p class="text-xs font-bold text-slate-500 bg-slate-100 w-fit px-2 py-0.5 rounded">
+                                        رقم الهوية: {{ $user->national_id ?? ($user->id_number ?? 'غير متوفر') }}
+                                    </p>
+                                    @if (isset($user->email))
+                                        <p class="text-xs text-slate-400 font-semibold">
+                                            البريد: {{ $user->email }} | الهاتف: {{ $user->phone ?? 'غير مدخل' }}
+                                        </p>
+                                    @endif
+                                    @if (isset($user->created_at))
+                                        <p class="text-[11px] text-slate-400 font-medium">
+                                            ⏱️ تاريخ الطلب: {{ $user->created_at->diffForHumans() }}
+                                        </p>
+                                    @endif
+                                </div>
+                            </div>
+                            <div class="flex gap-2 w-full md:w-auto border-t md:border-t-0 pt-4 md:pt-0">
+                                <!-- زر رفض الهوية -->
+                                <form action="{{ route('admin.users.reject', $user->id) }}" method="POST"
+                                    class="w-full md:w-auto">
+                                    @csrf
+                                    <button type="submit"
+                                        class="w-full md:w-auto px-5 py-2.5 bg-slate-50 text-slate-500 border border-slate-200 rounded-xl text-xs font-bold hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-all">
+                                        رفض الطلب
+                                    </button>
+                                </form>
+                                <!-- زر اعتماد الهوية -->
+                                <form action="{{ route('admin.users.verify', $user->id) }}" method="POST"
+                                    class="w-full md:w-auto">
+                                    @csrf
+                                    <button type="submit"
+                                        class="w-full md:w-auto px-6 py-2.5 bg-green-600 text-white rounded-xl text-xs font-bold shadow-sm hover:bg-green-700 transition-all flex items-center justify-center gap-1">
+                                        ✅ اعتماد الهوية
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    @empty
+                        <div
+                            class="text-center py-16 bg-white rounded-2xl border border-slate-100 text-slate-400 font-bold text-sm shadow-sm">
+                            <p class="text-3xl mb-2">✨</p>
+                            لا توجد أي طلبات معلقة لتوثيق هويات المستخدمين حالياً.
+                        </div>
+                    @endforelse
+                </div>
+
+                {{-- 🔥 محتوى تبويب سجلات إزاحة المقاعد التلقائية الجديد 🔥 --}}
+                {{-- <div x-show="activeTab === 'logs'" class="space-y-4 animate-fade-in" x-cloak>
+                    <div class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                        <div class="p-6 border-b border-slate-100 bg-slate-50/50">
+                            <h3 class="font-black text-slate-800 text-base flex items-center gap-2">
+                                🔄 مراقبة عمليات الإزاحة الذكية
+                            </h3>
+                            <p class="text-xs text-slate-400 font-semibold mt-1">يعرض هذا الجدول تحركات المقاعد التلقائية التي تمت عبر نظام التقسيم الديناميكي لمنع تضارب الفئات داخل الحافلات.</p>
+                        </div>
+                        
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-right border-collapse">
+                                <thead>
+                                    <tr class="bg-slate-50 text-slate-400 text-xs font-bold border-b border-slate-100">
+                                        <th class="p-4">الرحلة</th>
+                                        <th class="p-4">اسم الراكب</th>
+                                        <th class="p-4 text-center">المقعد القديم</th>
+                                        <th class="p-4 text-center">المقعد الجديد</th>
+                                        <th class="p-4">سبب الإزاحة الآلية</th>
+                                        <th class="p-4">التوقيت</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="text-sm font-bold text-slate-700 divide-y divide-slate-100">
+                                    @forelse($seatLogs ?? [] as $log)
+                                        <tr class="hover:bg-slate-50/80 transition-all">
+                                            <td class="p-4">
+                                                <span class="text-xs text-slate-400 block font-normal">#{{ $log->trip_id }}</span>
+                                                <span class="text-slate-800">{{ $log->trip->title ?? 'رحلة ملغاة' }}</span>
+                                            </td>
+                                            <td class="p-4 text-slate-900">{{ $log->passenger_name }}</td>
+                                            <td class="p-4 text-center">
+                                                <span class="inline-block px-2.5 py-1 bg-red-50 text-red-600 border border-red-100 rounded-lg text-xs">
+                                                    💺 {{ $log->old_seat }}
+                                                </span>
+                                            </td>
+                                            <td class="p-4 text-center">
+                                                <span class="inline-block px-2.5 py-1 bg-green-50 text-green-600 border border-green-100 rounded-lg text-xs">
+                                                    💺 {{ $log->new_seat }}
+                                                </span>
+                                            </td>
+                                            <td class="p-4 text-xs text-slate-500 font-medium max-w-xs truncate" title="{{ $log->reason }}">
+                                                {{ $log->reason }}
+                                            </td>
+                                            <td class="p-4 text-xs text-slate-400 font-semibold">
+                                                {{ $log->created_at->diffForHumans() }}
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr>
+                                            <td colspan="6" class="text-center py-16 text-slate-400">
+                                                <p class="text-3xl mb-2">🍃</p>
+                                                لم تحدث أي عمليات إزاحة أو تعديل مقاعد تلقائية في النظام حتى الآن.
+                                            </td>
+                                        </tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
                         </div>
                     </div>
-                    <div class="flex gap-3">
-                        <div class="w-1 h-8 bg-green-400 rounded-full"></div>
+                </div> --}}
+            </div>
+
+            {{-- الجزء الأيسر (4 أعمدة): ملخص الحالة التشغيلية للمنصة --}}
+            <div class="lg:col-span-4 space-y-6">
+                <!-- كارت الحالة والنسب التشغيلية الفورية -->
+                <div class="bg-white rounded-2xl p-6 border border-slate-100 shadow-sm">
+                    <h3
+                        class="text-base font-black text-slate-800 mb-4 flex items-center gap-2 border-b border-slate-50 pb-3">
+                        <span class="text-blue-600">📊</span> التوازن التشغيلي للمنصة
+                    </h3>
+
+                    <div class="space-y-4">
+                        <!-- مؤشر الوكالات -->
                         <div>
-                            <p class="text-[11px] font-black text-slate-700">اعتماد رحلة وكالة النور #5502</p>
-                            <p class="text-[9px] text-slate-400 font-bold italic">منذ 5 ساعات</p>
+                            <div class="flex justify-between items-center text-xs font-bold text-slate-600 mb-1.5">
+                                <span>الوكالات المعتمدة مقابل المعلقة</span>
+                                <span class="text-slate-400">{{ $activeAgenciesCount }} نشط / {{ $pendingAgenciesCount }}
+                                    معلق</span>
+                            </div>
+                            <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden flex">
+                                @php
+                                    $totalAgencies = $activeAgenciesCount + $pendingAgenciesCount ?: 1;
+                                    $activeAgencyPercent = ($activeAgenciesCount / $totalAgencies) * 100;
+                                @endphp
+                                <div class="bg-indigo-600 h-full" style="width: {{ $activeAgencyPercent }}%"></div>
+                            </div>
+                        </div>
+
+                        <!-- مؤشر الرحلات -->
+                        <div>
+                            <div class="flex justify-between items-center text-xs font-bold text-slate-600 mb-1.5">
+                                <span>الرحلات المنشورة مقابل المنتظرة</span>
+                                <span class="text-slate-400">{{ $activeTripsCount }} نشط / {{ $pendingTripsCount }}
+                                    معلق</span>
+                            </div>
+                            <div class="w-full h-2 bg-slate-100 rounded-full overflow-hidden flex">
+                                @php
+                                    $totalTrips = $activeTripsCount + $pendingTripsCount ?: 1;
+                                    $activeTripPercent = ($activeTripsCount / $totalTrips) * 100;
+                                @endphp
+                                <div class="bg-emerald-500 h-full" style="width: {{ $activeTripPercent }}%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- سجل عمليات ومزامنة أوتوماتيكية مبسطة -->
+                <div class="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+                    <h3
+                        class="text-xs font-black text-slate-400 uppercase mb-4 tracking-wider border-b border-slate-50 pb-2">
+                        ⏱️ مؤشرات سلامة البيانات</h3>
+                    <div class="space-y-4">
+                        <div class="flex gap-3 items-start">
+                            <div class="w-1.5 h-8 bg-blue-500 rounded-full mt-0.5"></div>
+                            <div>
+                                <p class="text-xs font-bold text-slate-700">مزامنة جداول المقاعد المتاحة والرحلات</p>
+                                <p class="text-[10px] text-slate-400 font-semibold mt-0.5">منذ ثوانٍ • نظام أوتوماتيكي</p>
+                            </div>
+                        </div>
+                        <div class="flex gap-3 items-start">
+                            <div class="w-1.5 h-8 bg-emerald-500 rounded-full mt-0.5"></div>
+                            <div>
+                                <p class="text-xs font-bold text-slate-700">تحديث مؤشر المتصلين الفوري من الجلسات</p>
+                                <p class="text-[10px] text-slate-400 font-semibold mt-0.5">تحديث مستمر</p>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<style>
-    .animate-fade-in { animation: fadeIn 0.5s ease-out; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-</style>
+    <!-- أنيميشن وإصلاح لـ x-cloak الخاص بـ AlpineJS -->
+    <style>
+        [x-cloak] {
+            display: none !important;
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
 @endsection

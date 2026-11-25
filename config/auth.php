@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use App\Models\Agency;
 
 return [
 
@@ -42,7 +43,26 @@ return [
             'driver' => 'session',
             'provider' => 'users',
         ],
+        'agency' => [
+            'driver' => 'session',
+            'provider' => 'agencies',
+        ],
+        'employee' => [
+        'driver' => 'session',
+        'provider' => 'agency_employees',
+        ],
+        'sanctum' => [
+            'driver' => 'sanctum',
+            'provider' => 'users',
+        ],
+        // إضافة الـ Guard الخاص بالأدمن هنا
+        'admin' => [
+            'driver' => 'session',
+            'provider' => 'admins',
+        ]
     ],
+
+
 
     /*
     |--------------------------------------------------------------------------
@@ -64,14 +84,32 @@ return [
     'providers' => [
         'users' => [
             'driver' => 'eloquent',
-            'model' => env('AUTH_MODEL', User::class),
+            'model' => App\Models\User::class,
         ],
-
-        // 'users' => [
-        //     'driver' => 'database',
-        //     'table' => 'users',
-        // ],
+        'agencies' => [ // بروفايدر يربط الجارد بمودل الوكالة الحقيقي
+            'driver' => 'eloquent',
+            'model' => App\Models\Agency::class,
+        ],
+        'agency_employees' => [
+        'driver' => 'eloquent',
+        'model' => App\Models\AgencyEmployee::class,
+        ],
+        'admins' => [
+            'driver' => 'eloquent',
+            'model' => App\Models\Admin::class,
+        ],
     ],
+    // 'providers' => [
+    //     'users' => [
+    //         'driver' => 'eloquent',
+    //         'model' => env('AUTH_MODEL', User::class),
+    //     ],
+
+    //     // 'users' => [
+    //     //     'driver' => 'database',
+    //     //     'table' => 'users',
+    //     // ],
+    // ],
 
     /*
     |--------------------------------------------------------------------------
@@ -96,6 +134,12 @@ return [
         'users' => [
             'provider' => 'users',
             'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),
+            'expire' => 60,
+            'throttle' => 60,
+        ],
+        'agencies' => [
+            'provider' => 'agencies',
+            'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'), // يستخدم نفس جدول التوكن الافتراضي
             'expire' => 60,
             'throttle' => 60,
         ],

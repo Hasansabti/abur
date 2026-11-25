@@ -34,5 +34,26 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    
+    'moyasar' => [
+        'secret_key' => env('MOYASAR_API_KEY'),
+        'publishable_key' => env('MOYASAR_PUBLISHABLE_KEY'),
+        'webhook_secret'  => env('MOYASAR_WEBHOOK_SECRET'),
+
+    ],
+
+    'sms' => [
+        'provider' => env('SMS_PROVIDER'),
+        'key' => env('SMS_API_KEY'),
+        'sender' => env('SMS_SENDER'),
+        'endpoint' => env('SMS_ENDPOINT'),
+    ],
+
+    'whatsapp' => [
+        'provider' => env('WHATSAPP_PROVIDER'),
+        'token' => env('WHATSAPP_TOKEN'),
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
+        'endpoint' => env('WHATSAPP_ENDPOINT'),
+    ],
 
 ];

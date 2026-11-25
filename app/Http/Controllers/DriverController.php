@@ -12,4 +12,8 @@ class DriverController extends Controller
     public function dashboardDriver(){
         return view('driver.dashboard');
     }
+    public function passinger()
+    {
+        return view('driver.passinger');
+    }
 }
