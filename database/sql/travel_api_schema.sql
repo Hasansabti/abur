@@ -1,0 +1,58 @@
+-- Travel booking backend schema (MySQL 8+)
+
+CREATE TABLE IF NOT EXISTS agencies (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NULL UNIQUE,
+    phone VARCHAR(30) NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS trips (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    agency_id BIGINT UNSIGNED NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    from_city VARCHAR(255) NOT NULL,
+    to_city VARCHAR(255) NOT NULL,
+    transport_type ENUM('bus', 'flight') NOT NULL DEFAULT 'bus',
+    trip_type ENUM('one_way', 'round_trip') NOT NULL DEFAULT 'one_way',
+    departure_at DATETIME NOT NULL,
+    arrival_at DATETIME NULL,
+    total_seats INT UNSIGNED NOT NULL,
+    available_seats INT UNSIGNED NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_trips_agency FOREIGN KEY (agency_id) REFERENCES agencies(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS bookings (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    trip_id BIGINT UNSIGNED NOT NULL,
+    user_id BIGINT UNSIGNED NULL,
+    customer_name VARCHAR(255) NOT NULL,
+    customer_email VARCHAR(255) NULL,
+    customer_phone VARCHAR(30) NULL,
+    status ENUM('pending', 'confirmed', 'cancelled') NOT NULL DEFAULT 'pending',
+    payment_status ENUM('unpaid', 'paid', 'failed') NOT NULL DEFAULT 'unpaid',
+    total_amount DECIMAL(10, 2) NOT NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_bookings_trip FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+    CONSTRAINT fk_bookings_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS booking_seats (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    booking_id BIGINT UNSIGNED NOT NULL,
+    trip_id BIGINT UNSIGNED NOT NULL,
+    seat_number INT UNSIGNED NOT NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_booking_seats_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE CASCADE,
+    CONSTRAINT fk_booking_seats_trip FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+    CONSTRAINT uq_trip_seat UNIQUE (trip_id, seat_number)
+);

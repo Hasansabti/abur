@@ -1,0 +1,27 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+   public function up(): void
+{
+    Schema::table('agency_transactions', function (Blueprint $table) {
+        $table->decimal('gross_amount', 12, 2)->nullable()->after('amount');
+        $table->decimal('commission_amount', 12, 2)->nullable()->after('gross_amount');
+        $table->unsignedInteger('passengers_count')->nullable()->after('commission_amount');
+    });
+}
+
+public function down(): void
+{
+    Schema::table('agency_transactions', function (Blueprint $table) {
+        $table->dropColumn(['gross_amount', 'commission_amount', 'passengers_count']);
+    });
+}
+};
