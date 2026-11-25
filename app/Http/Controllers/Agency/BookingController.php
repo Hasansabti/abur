@@ -337,6 +337,9 @@ class BookingController extends Controller
         return view('agency.bookings.addBookings', [
             'trips'                => $trips,
             'trip'                 => $trip,
+            'nationalities'        => \App\Support\Nationalities::all(),
+            'extra_bed_price'      => $trip?->extra_bed_price ?? config('bookings.extra_bed_default_price', 0),
+            'max_extra_beds'       => $trip?->max_extra_beds ?? 1,
             'booked_seats_details' => $booked_seats_details,
             'meal_options'         => $mealOptions,
             'meal_prices'          => $mealPrices,
@@ -403,9 +406,28 @@ class BookingController extends Controller
             ], 422);
         }
 
-        // 3. تحديث رقم المقعد
+        $oldSeat = $seat->seat_number;
         $seat->seat_number = (string) $new;
         $seat->save();
+
+        \App\Models\TripSeatLog::create([
+            'trip_id' => $trip->id,
+            'booking_seat_id' => $seat->id,
+            'passenger_name' => $seat->passenger_name,
+            'old_seat' => is_array($oldSeat) ? implode(',', $oldSeat) : (string) $oldSeat,
+            'new_seat' => (string) $new,
+            'reason' => $request->input('reason', 'تغيير مقعد من لوحة الوكالة'),
+        ]);
+
+        if ($seat->booking) {
+            app(\App\Services\BookingChangeLogger::class)->log(
+                $seat->booking,
+                'seat_changed',
+                ['seat_number' => $oldSeat],
+                ['seat_number' => $new],
+                ['entity_type' => 'booking_seat', 'entity_id' => $seat->id, 'source' => 'agency']
+            );
+        }
 
         return response()->json([
             'success' => true,
@@ -608,6 +630,8 @@ class BookingController extends Controller
                 // 8. إنشاء مقاعد الحجز وربط التذاكر (QR Codes)
                 $this->createSeatsAndGenerateTickets($booking, $trip, $parsed, $costsAndDetails);
 
+                $this->persistBookingExtras($booking, $parsed, $costsAndDetails);
+
                 // 9. إنهاء العمليات (تحديث سعة الرحلة وتسجيل التدقيق)
                 $this->finalizeTripAndLogAudit($booking, $trip, $parsed, $paymentInfo, $costsAndDetails, $agentId);
 
@@ -713,6 +737,13 @@ class BookingController extends Controller
         $parsed['roomQuantities']    = $this->parseJsonOrArray($request->input('room_quantities'));
         $parsed['passengerMeals']    = $this->parseJsonOrArray($request->input('passenger_meals'));
         $parsed['passengerServices'] = $this->parseJsonOrArray($request->input('passenger_services'));
+        $profilesRaw = $this->parseJsonOrArray($request->input('passenger_profiles'));
+        $parsed['passengerProfiles'] = is_array($profilesRaw) ? $profilesRaw : [];
+        $parsed['customServices'] = $this->parseJsonOrArray($request->input('custom_services'));
+        $parsed['discountCode'] = trim((string) $request->input('discount_code', ''));
+        $parsed['bedTypes'] = $this->parseJsonOrArray($request->input('passenger_bed_types'));
+        $parsed['extraBeds'] = $this->parseJsonOrArray($request->input('passenger_extra_beds'));
+        $parsed['allowPartialConfirm'] = $request->boolean('confirm_partial_payment');
 
         $parsed['roomCount'] = $parsed['isLocked'] ? 0 : array_sum(is_array($parsed['roomQuantities']) ? $parsed['roomQuantities'] : []);
         $chosenRoomTypes = is_array($parsed['roomQuantities']) ? array_keys(array_filter($parsed['roomQuantities'], fn($qty) => $qty > 0)) : [];
@@ -775,6 +806,21 @@ class BookingController extends Controller
 
         $alreadyBooked = BookingSeat::where('trip_id', $trip->id)->whereIn('seat_number', $parsed['seatsArray'])->where('is_extra', 0)->exists();
         if ($alreadyBooked) throw new \Exception('المقاعد المحددة تم حجزها للتو من نافذة أخرى. يرجى تحديث المخطط.');
+
+        $companionIds = [];
+        foreach ($parsed['passengerProfiles'] ?? [] as $profile) {
+            if (!empty($profile['companion_id'])) {
+                $cid = (int) $profile['companion_id'];
+                if (in_array($cid, $companionIds, true)) {
+                    throw new \Exception('لا يمكن إضافة نفس التابع أكثر من مرة في الحجز.');
+                }
+                $companionIds[] = $cid;
+            }
+            $dob = $profile['date_of_birth'] ?? null;
+            if ($dob && strtotime($dob) >= strtotime('today')) {
+                throw new \Exception('تاريخ الميلاد لا يمكن أن يكون في المستقبل.');
+            }
+        }
     }
     /**
      * حساب عدد المقاعد المشغولة فعلياً لرحلة معينة، اعتماداً مباشرة على سجلات booking_seats
@@ -948,16 +994,57 @@ class BookingController extends Controller
                 $totalServicesCost += $seatServTotal;
                 $seatServicesDetails[$seatNum] = $seatServList;
             }
-            $totalAmount = $totalRoomCost + $totalSeatsCost + $totalPackagesCost + $totalMealsCost + $totalServicesCost;
+            $totalExtraBeds = 0;
+            $maxExtraBeds = (int) ($trip->max_extra_beds ?? 1);
+            $extraBedPrice = floatval($trip->extra_bed_price ?? config('bookings.extra_bed_default_price', 0));
+            foreach ($parsed['seatsArray'] as $seatNum) {
+                $seatNum = $this->cleanSeatNum($seatNum);
+                $qty = (int) ($parsed['extraBeds'][$seatNum] ?? $parsed['extraBeds'][(string) $seatNum] ?? 0);
+                if ($qty > $maxExtraBeds) {
+                    throw new \Exception("تجاوز عدد الأسرة الإضافية المسموح للمقعد {$seatNum}.");
+                }
+                $totalExtraBeds += $qty * $extraBedPrice;
+            }
+
+            $totalCustomServices = 0;
+            if (is_array($parsed['customServices'])) {
+                foreach ($parsed['customServices'] as $svc) {
+                    $qty = max(0, (int) ($svc['quantity'] ?? 0));
+                    $price = floatval($svc['unit_price'] ?? $svc['price'] ?? 0);
+                    if ($qty <= 0 || $price < 0) {
+                        throw new \Exception('خدمة مخصصة غير صالحة: الكمية والسعر يجب أن يكونا موجبين.');
+                    }
+                    $totalCustomServices += $qty * $price;
+                }
+            }
+
+            $subtotal = $totalRoomCost + $totalSeatsCost + $totalPackagesCost + $totalMealsCost + $totalServicesCost + $totalExtraBeds + $totalCustomServices;
+            $discountAmount = 0;
+            if (!empty($parsed['discountCode'])) {
+                $preview = app(\App\Services\DiscountCodeService::class)->preview(
+                    $parsed['discountCode'],
+                    $subtotal,
+                    $trip->agency_id,
+                    $trip->id,
+                    $request->input('customer_phone')
+                );
+                if (empty($preview['ok'])) {
+                    throw new \Exception($preview['message'] ?? 'كود الخصم غير صالح.');
+                }
+                $discountAmount = floatval($preview['amount'] ?? 0);
+            }
+            $totalAmount = max(0, $subtotal - $discountAmount);
         }
 
         return [
             'totalAmount' => $totalAmount,
+            'subtotalAmount' => $subtotal ?? $totalAmount,
+            'discountAmount' => $discountAmount ?? 0,
             'seatMealsDetails' => $seatMealsDetails,
             'seatServicesDetails' => $seatServicesDetails,
             'roomOptions' => $roomOptions,
             'seatSharedTypes' => $seatSharedTypes,
-
+            'extraBedPrice' => $extraBedPrice ?? 0,
         ];
     }
 
@@ -1004,14 +1091,24 @@ class BookingController extends Controller
         $cashPaid      = min($actualTotalPaid, $totalAmount);
         $netAgencyAmount = max(0, $totalAmount - $cashPaid);
 
+        if ($cashPaid > $totalAmount && $totalAmount > 0) {
+            $paymentStatus = 'overpaid';
+        }
+
         if ($isLocked) {
             $bookingStatus = 'locked';
             $paymentStatus = 'unpaid';
         } else {
             if ($cashPaid >= $totalAmount && $totalAmount > 0) $paymentStatus = 'paidof';
+            elseif ($cashPaid > $totalAmount) $paymentStatus = 'overpaid';
             elseif ($cashPaid > 0) $paymentStatus = 'partial';
             else $paymentStatus = 'unpaid';
             $bookingStatus = 'confirmed';
+
+            $remaining = $totalAmount - $cashPaid;
+            if ($remaining > 0.009 && !config('bookings.allow_confirm_with_remaining', true) && !$request->boolean('confirm_partial_payment')) {
+                throw new \Exception('يوجد مبلغ متبقٍ. أكّد اعتماد الحجز غير مكتمل الدفع أو أكمل الدفع.');
+            }
         }
 
         return [
@@ -1046,6 +1143,9 @@ class BookingController extends Controller
             'status'               => $pay['bookingStatus'],
             'payment_status'       => $pay['paymentStatus'],
             'total_amount'         => $costs['totalAmount'],
+            'subtotal_amount'      => $costs['subtotalAmount'] ?? $costs['totalAmount'],
+            'discount_amount'      => $costs['discountAmount'] ?? 0,
+            'discount_code'        => $parsed['discountCode'] ?: null,
             'cash_paid'            => $pay['cashPaid'],
             'net_amount'           => $pay['netAgencyAmount'],
             'booked_by_agency'     => true,
@@ -1115,12 +1215,45 @@ class BookingController extends Controller
                 $formattedRoomType = 'غرفة مشتركة (' . ($sharedTypeNames[$sharedSubtype] ?? $sharedSubtype) . ')';
             }
 
+            $profile = $parsed['passengerProfiles'][$cleanSeat]
+                ?? $parsed['passengerProfiles'][(string) $cleanSeat]
+                ?? $parsed['passengerProfiles'][$mainIdx]
+                ?? [];
+            $dob = $profile['date_of_birth'] ?? null;
+            if ($dob && strtotime($dob) >= strtotime('today')) {
+                throw new \Exception('تاريخ الميلاد لا يمكن أن يكون في المستقبل.');
+            }
+            $expiry = $profile['identity_expiry_date'] ?? null;
+            if ($expiry && strtotime($expiry) < strtotime('today') && config('bookings.identity_expiry_blocks_booking')) {
+                throw new \Exception('وثيقة الهوية منتهية ولا يمكن إتمام الحجز وفق سياسة النظام.');
+            }
+            $companionId = $profile['companion_id'] ?? null;
+            if ($companionId) {
+                static $usedCompanions = [];
+                if (in_array((int) $companionId, $usedCompanions, true)) {
+                    throw new \Exception('لا يمكن إضافة التابع نفسه أكثر من مرة في الحجز.');
+                }
+                $usedCompanions[] = (int) $companionId;
+            }
+
+            $extraBedQty = (int) ($parsed['extraBeds'][$cleanSeat] ?? $profile['extra_bed_quantity'] ?? 0);
+            $bedType = $parsed['bedTypes'][$cleanSeat] ?? $profile['bed_type'] ?? null;
+
             $bookedSeat = $booking->bookingSeats()->create([
                 'trip_id'               => $trip->id,
                 'seat_number'           => $cleanSeat,
-                'passenger_name'        => $parsed['passengerNamesArray'][$mainIdx] ?? $leadName,
-                'gender'                => $parsed['passengerGendersArray'][$mainIdx] ?? 'male',
-                'passenger_national_id' => $parsed['passengerIdsArray'][$mainIdx] ?? '',
+                'passenger_name'        => $profile['name'] ?? ($parsed['passengerNamesArray'][$mainIdx] ?? $leadName),
+                'gender'                => $profile['gender'] ?? ($parsed['passengerGendersArray'][$mainIdx] ?? 'male'),
+                'passenger_national_id' => $profile['national_id'] ?? ($parsed['passengerIdsArray'][$mainIdx] ?? ''),
+                'nationality_code'      => $profile['nationality_code'] ?? null,
+                'identity_version'      => $profile['identity_version'] ?? null,
+                'identity_issue_place'  => $profile['identity_issue_place'] ?? null,
+                'identity_expiry_date'  => $profile['identity_expiry_date'] ?? null,
+                'date_of_birth'         => $dob,
+                'companion_id'          => $profile['companion_id'] ?? null,
+                'bed_type'              => $bedType,
+                'extra_bed_quantity'    => $extraBedQty,
+                'extra_bed_unit_price'  => $extraBedQty > 0 ? ($costs['extraBedPrice'] ?? 0) : 0,
                 'room_type'             => $formattedRoomType,
                 'with_breakfast'        => $md['hasBf'],
                 'with_lunch'            => $md['hasLn'],
@@ -1281,5 +1414,40 @@ class BookingController extends Controller
             return (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) ? $decoded : $input;
         }
         return [];
+    }
+
+    private function persistBookingExtras($booking, array $parsed, array $costs): void
+    {
+        if (!empty($parsed['customServices']) && is_array($parsed['customServices'])) {
+            foreach ($parsed['customServices'] as $svc) {
+                $qty = max(1, (int) ($svc['quantity'] ?? 1));
+                $price = floatval($svc['unit_price'] ?? $svc['price'] ?? 0);
+                $booking->customServices()->create([
+                    'booking_seat_id' => null,
+                    'name' => $svc['name'] ?? 'خدمة مخصصة',
+                    'description' => $svc['description'] ?? null,
+                    'quantity' => $qty,
+                    'unit_price' => $price,
+                    'total_price' => $qty * $price,
+                    'applies_to_booking' => empty($svc['seat']),
+                ]);
+            }
+        }
+
+        if (!empty($parsed['discountCode']) && !empty($costs['discountAmount'])) {
+            app(\App\Services\DiscountCodeService::class)->applyForBooking(
+                $parsed['discountCode'],
+                $booking,
+                (float) ($costs['subtotalAmount'] ?? $costs['totalAmount'])
+            );
+        }
+
+        app(\App\Services\BookingChangeLogger::class)->log(
+            $booking,
+            'booking_created',
+            [],
+            ['total_amount' => $booking->total_amount, 'seats' => $parsed['seatsArray'] ?? []],
+            ['force' => true, 'source' => 'agency']
+        );
     }
 }

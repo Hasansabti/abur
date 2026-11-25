@@ -155,6 +155,16 @@
 
         $cleanType = fn($type) => explode('_', (string) $type)[0];
         $seatName = fn($seat) => $seat->passenger_name ?: ($seat->booking?->customer_name ?: 'مسافر بدون اسم');
+        $isExtraPassenger = fn($s) => (bool) ($s->is_extra ?? false)
+            || filled($s->parent_seat_id)
+            || (($s->room_type ?? '') === 'additional');
+        $bedTypeLabel = function ($type) {
+            return match ($type) {
+                'single', 'مفرد', 'سرير مفرد' => 'سرير مفرد',
+                'double', 'مزدوج', 'سرير مزدوج' => 'سرير مزدوج',
+                default => $type ?: '—',
+            };
+        };
 
         $typeLabel = function ($type) {
             $t = mb_strtolower((string) $type);
@@ -221,6 +231,7 @@ $getRoomCapacity = function ($room, $seat = null) {
                 fn($s) => $isSharedSeat($s) &&
                     is_null($s->trip_room_id) &&
                     !$isLockedSeat($s) &&
+                    !$isExtraPassenger($s) &&
                     !str_contains($s->passenger_name ?? '', 'مغلق'),
             )
             ->unique('id');
@@ -271,10 +282,10 @@ $getRoomCapacity = function ($room, $seat = null) {
          | 4) تسكين العملاء: دمج حسب رقم الحجز
          ============================================================ */
        $customerGroups = $allpeopleintrip
-    ->filter(fn($s) => $s->room_type !== 'blocked' && !$isLockedSeat($s))
+    ->filter(fn($s) => $s->room_type !== 'blocked' && !$isLockedSeat($s) && !$isExtraPassenger($s))
     ->filter(fn($s) => !$isSharedSeat($s) || !is_null($s->trip_room_id))
     ->groupBy(fn($s) => $isSharedSeat($s) ? 'room-' . $s->trip_room_id : 'booking-' . $s->booking_id)
-    ->map(function ($seats) use ($isSharedSeat, $cleanType, $resolveRoom, $seatName, $getRoomCapacity) {
+    ->map(function ($seats) use ($isSharedSeat, $cleanType, $resolveRoom, $seatName, $getRoomCapacity, $bedTypeLabel) {
         $first = $seats->first();
         $shared = $isSharedSeat($first);
 
@@ -333,7 +344,9 @@ $getRoomCapacity = function ($room, $seat = null) {
             'seats' => $seats->values(),
             'rows' => $rows,
             'guestCount' => $rows->count(),
-            'extraCount' => $extraSeats->count(),
+            'extraCount' => 0,
+            'bedTypes' => $seats->pluck('bed_type')->filter()->unique()->values()->map($bedTypeLabel),
+            'extraBeds' => (int) $seats->sum(fn($s) => (int) ($s->extra_bed_quantity ?? 0)),
             'isShared' => $shared,
             'bookingIds' => $bookingIds,
             'bookingLabel' => $shared ? 'غرفة عامة' : '#' . $bookingIds->first(),
@@ -362,6 +375,10 @@ $getRoomCapacity = function ($room, $seat = null) {
         $printFemales = $printSeats->where('gender', 'female')->count();
         $totalRoomsCount = $printGroups->count();
         $totalBookingsCount = $printSeats->pluck('booking_id')->unique()->count();
+        $totalExtraBeds = $printGroups->sum(fn($g) => (int) ($g->extraBeds ?? 0));
+        $singleBeds = $printSeats->filter(fn($s) => in_array($s->bed_type, ['single', 'مفرد', 'سرير مفرد'], true))->count();
+        $doubleBeds = $printSeats->filter(fn($s) => in_array($s->bed_type, ['double', 'مزدوج', 'سرير مزدوج'], true))->count();
+        $unassignedGuestCount = $customerGroups->filter(fn($g) => !$g->assigned)->sum('guestCount');
     @endphp
 
     <div class="container mx-auto px-4 py-8 font-cairo" dir="rtl">
@@ -416,6 +433,10 @@ $getRoomCapacity = function ($room, $seat = null) {
                         </button>
                     </form>
 
+                    <a href="{{ route('agency.reports.meals', ['trip_id' => $activeTrip->id]) }}"
+                        class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-sm">
+                        <span>🍽</span> تقرير الوجبات
+                    </a>
                     <button type="button" onclick="printCustomTable()"
                         class="bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer">
                         <span>📄</span> تصدير كشف الغرف (PDF)
@@ -873,7 +894,7 @@ $getRoomCapacity = function ($room, $seat = null) {
                             <span>التسكين للعملاء</span>
                         </h2>
                         <p class="text-[11px] text-slate-400 font-medium mb-3">
-                            كل حجز في بطاقة واحدة (يشمل المقاعد الإضافية) ورقم غرفة واحد. الغرف المشتركة المسكّنة تظهر
+                            كل حجز في بطاقة واحدة للأشخاص الفعليين فقط (بدون المقاعد الإضافية). الغرف المشتركة المسكّنة تظهر
                             كبطاقة لكل غرفة.
                         </p>
 
@@ -911,9 +932,14 @@ $getRoomCapacity = function ($room, $seat = null) {
                                                     <span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">
                                                         {{ $g->guestCount }} نزلاء
                                                     </span>
-                                                    @if ($g->extraCount)
-                                                        <span class="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-md">
-                                                            + {{ $g->extraCount }} مقعد إضافي
+                                                    @if ($g->bedTypes->isNotEmpty())
+                                                        <span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-md">
+                                                            {{ $g->bedTypes->implode(' / ') }}
+                                                        </span>
+                                                    @endif
+                                                    @if ($g->extraBeds)
+                                                        <span class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md">
+                                                            + {{ $g->extraBeds }} سرير إضافي
                                                         </span>
                                                     @endif
                                                 </div>
@@ -930,11 +956,6 @@ $getRoomCapacity = function ($room, $seat = null) {
                                                                     class="text-xs font-bold text-slate-700 truncate flex items-center gap-1.5">
                                                                     <span>{{ $p->gender === 'male' ? '👨' : '👩' }}</span>
                                                                     {{ $seatName($p) }}
-                                                                    @if ($r->extras->isNotEmpty())
-                                                                        <span
-                                                                            class="text-[9px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded-md shrink-0">+
-                                                                            مقعد إضافي</span>
-                                                                    @endif
                                                                 </span>
                                                                 @if ($g->isShared)
                                                                     <span
@@ -1031,6 +1052,8 @@ $getRoomCapacity = function ($room, $seat = null) {
                                                 <th class="p-3">النزيل</th>
                                                 <th class="p-3">الجنس</th>
                                                 <th class="p-3">نوع الغرفة</th>
+                                                <th class="p-3">نوع السرير</th>
+                                                <th class="p-3">سرير إضافي</th>
                                                 <th class="p-3">حالة التسكين</th>
                                                 <th class="p-3 rounded-l-xl text-center">رقم الغرفة</th>
                                             </tr>
@@ -1064,11 +1087,6 @@ $getRoomCapacity = function ($room, $seat = null) {
                                                                 <span
                                                                     class="w-1.5 h-1.5 rounded-full bg-indigo-300"></span>
                                                                 {{ $seatName($p) }}
-                                                                @if ($r->extras->isNotEmpty())
-                                                                    <span
-                                                                        class="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded-md font-bold">+
-                                                                        مقعد إضافي</span>
-                                                                @endif
                                                             </span>
                                                         </td>
 
@@ -1083,6 +1101,12 @@ $getRoomCapacity = function ($room, $seat = null) {
                                                             <td rowspan="{{ $g->rows->count() }}"
                                                                 class="p-3 font-bold text-indigo-600 align-top">
                                                                 {{ $typeLabel($g->type) }}
+                                                            </td>
+                                                            <td rowspan="{{ $g->rows->count() }}" class="p-3 align-top text-[11px]">
+                                                                {{ $g->bedTypes->implode(' / ') ?: '—' }}
+                                                            </td>
+                                                            <td rowspan="{{ $g->rows->count() }}" class="p-3 align-top font-mono">
+                                                                {{ $g->extraBeds ?: '—' }}
                                                             </td>
 
                                                             <td rowspan="{{ $g->rows->count() }}" class="p-3 align-top">
@@ -1365,6 +1389,10 @@ $getRoomCapacity = function ($room, $seat = null) {
                                         <span class="text-[10px]">👤</span>
                                     @endfor
                                 </div>
+                                <span class="text-[9px] text-slate-500 mt-1">{{ $g->bedTypes->implode(' / ') ?: 'نوع السرير غير محدد' }}</span>
+                                @if ($g->extraBeds)
+                                    <span class="text-[9px] text-amber-700 font-bold">أسرة إضافية: {{ $g->extraBeds }}</span>
+                                @endif
                             </div>
 
                             <div
@@ -1405,11 +1433,31 @@ $getRoomCapacity = function ($room, $seat = null) {
                         </ul>
                     </div>
 
-                    <div class="col-span-2 grid grid-cols-5 gap-3">
+                    <div class="col-span-2 grid grid-cols-4 gap-3">
                         <div
                             class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
                             <span class="text-[9px] text-slate-400 font-bold block mb-1">إجمالي النزلاء</span>
                             <span class="text-base font-black text-[#032B53] font-mono">{{ $totalGuests }}</span>
+                        </div>
+                        <div
+                            class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
+                            <span class="text-[9px] text-slate-400 font-bold block mb-1">إجمالي الغرف</span>
+                            <span class="text-base font-black text-[#032B53] font-mono">{{ $totalRoomsCount }}</span>
+                        </div>
+                        <div
+                            class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
+                            <span class="text-[9px] text-slate-400 font-bold block mb-1">أسرة مفردة / مزدوجة</span>
+                            <span class="text-base font-black text-[#032B53] font-mono">{{ $singleBeds }} / {{ $doubleBeds }}</span>
+                        </div>
+                        <div
+                            class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
+                            <span class="text-[9px] text-slate-400 font-bold block mb-1">أسرة إضافية</span>
+                            <span class="text-base font-black text-[#032B53] font-mono">{{ $totalExtraBeds }}</span>
+                        </div>
+                        <div
+                            class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
+                            <span class="text-[9px] text-slate-400 font-bold block mb-1">غير مسكّنين</span>
+                            <span class="text-base font-black text-[#032B53] font-mono">{{ $unassignedGuestCount }}</span>
                         </div>
                         <div
                             class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
@@ -1420,11 +1468,6 @@ $getRoomCapacity = function ($room, $seat = null) {
                             class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
                             <span class="text-[9px] text-slate-400 font-bold block mb-1">الرجال</span>
                             <span class="text-base font-black text-[#032B53] font-mono">{{ $printMales }}</span>
-                        </div>
-                        <div
-                            class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">
-                            <span class="text-[9px] text-slate-400 font-bold block mb-1">إجمالي الغرف</span>
-                            <span class="text-base font-black text-[#032B53] font-mono">{{ $totalRoomsCount }}</span>
                         </div>
                         <div
                             class="border border-slate-200 rounded-2xl p-3 text-center bg-white shadow-sm flex flex-col justify-between">

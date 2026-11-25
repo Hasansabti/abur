@@ -34,6 +34,15 @@ class BookingSeat extends Model
 
         'parent_seat_id',
         'is_extra',
+        'nationality_code',
+        'identity_version',
+        'identity_issue_place',
+        'identity_expiry_date',
+        'date_of_birth',
+        'companion_id',
+        'bed_type',
+        'extra_bed_quantity',
+        'extra_bed_unit_price',
     ];
 
     protected function casts(): array
@@ -52,7 +61,16 @@ class BookingSeat extends Model
             'meal_options'    => 'array',
             'extra_services'  => 'array',
             'is_extra'        => 'boolean',
+            'identity_expiry_date' => 'date',
+            'date_of_birth' => 'date',
+            'extra_bed_quantity' => 'integer',
+            'extra_bed_unit_price' => 'decimal:2',
         ];
+    }
+
+    public function isActualGuest(): bool
+    {
+        return !$this->is_extra && empty($this->parent_seat_id) && $this->room_type !== 'additional';
     }
 
     public function getTotalExtraServicesPriceAttribute(): float
@@ -103,5 +121,15 @@ class BookingSeat extends Model
     public function logs(): HasMany
     {
         return $this->hasMany(TripSeatLog::class, 'booking_seat_id');
+    }
+
+    public function companion(): BelongsTo
+    {
+        return $this->belongsTo(Companion::class);
+    }
+
+    public function nationalityLabel(): ?string
+    {
+        return \App\Support\Nationalities::label($this->nationality_code);
     }
 }

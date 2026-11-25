@@ -771,10 +771,19 @@
 
                         {{-- إعطاء لون خلفية خفيف باللون الأحمر للصف عندما تكون الحالة طلب إلغاء --}}
                         <tr class="transition-colors {{ $booking->status === 'requestC' ? 'bg-red-50/70 hover:bg-red-100/70 border-r-4 border-r-red-500' : 'hover:bg-gray-50/30' }}"
-                            x-show="visible" x-data="{
+                            x-show="visible"                             x-data="{
                                 showEditModal: false,
                                 showInvoiceModal: false,
                                 showUnverified: false,
+                                showActions: false,
+                                actionModal: null,
+                                actionBusy: false,
+                                smsBody: '',
+                                waBody: '',
+                                creditAmount: 0,
+                                pointsAmount: 0,
+                                customerLink: '',
+                                actionMsg: '',
                                 status: @js($booking->status),
                                 filterKey: @js($filterKey),
                                 hasUnverified: @js(count($unverified) > 0),
@@ -1024,10 +1033,23 @@
 
                             {{-- أزرار التحكم + نافذة التعديل +  الفاتورة --}}
                             <td class="p-6 text-center">
-                                <div class="flex justify-center gap-2">
+                                <div class="flex justify-center gap-2 relative">
+                                    <div class="relative">
+                                        <button type="button" @click="showActions = !showActions" class="p-2 bg-slate-800 text-white rounded-xl text-[10px] font-black">إجراءات ▾</button>
+                                        <div x-show="showActions" @click.outside="showActions=false" class="absolute left-0 z-40 mt-1 w-52 bg-white border rounded-xl shadow-lg text-right text-xs font-bold overflow-hidden" style="display:none">
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="showEditModal=true; showActions=false">تعديل الحجز</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="showInvoiceModal=true; showActions=false">سند قبض / طباعة</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="actionModal='invoice'; showActions=false">إصدار / طباعة فاتورة</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="actionModal='sms'; showActions=false">إرسال SMS</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="actionModal='whatsapp'; showActions=false">شارك عبر واتساب</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="actionModal='link'; showActions=false">رابط الزبون</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="actionModal='credit'; showActions=false">إضافة رصيد</button>
+                                            <button type="button" class="block w-full px-3 py-2 hover:bg-slate-50" @click="actionModal='points'; showActions=false">صرف نقاط</button>
+                                        </div>
+                                    </div>
                                     <button type="button" @click="showEditModal = true"
                                         class="inline-flex items-center justify-center p-2 text-blue-600 bg-blue-50 hover:bg-blue-600 hover:text-white rounded-xl transition-all duration-200 shadow-sm hover:shadow-md hover:shadow-blue-200"
-                                        title="تعديل الحالة ومراجعة الإيصال">
+                                        title="تعديل الحجز">
                                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                                 d="M3 10h18M7 15h1m4 0h1m-7 4h12a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z">
@@ -1055,6 +1077,40 @@
                                         title=" فاتورة / طباعة">🖨️</button>
                                 </div>
 
+                                <template x-if="actionModal">
+                                    <div class="fixed inset-0 z-[70] bg-slate-900/50 flex items-center justify-center p-4" @click.self="actionModal=null">
+                                        <div class="bg-white rounded-2xl p-5 w-full max-w-md text-right space-y-3" @click.stop>
+                                            <h4 class="font-black text-sm" x-text="{
+                                                invoice: 'إصدار الفاتورة',
+                                                sms: 'إرسال SMS',
+                                                whatsapp: 'مشاركة واتساب',
+                                                link: 'رابط الزبون',
+                                                credit: 'إضافة رصيد للوكالة',
+                                                points: 'صرف نقاط'
+                                            }[actionModal]"></h4>
+                                            <p class="text-xs text-slate-500">{{ $booking->customer_name }} — {{ $booking->customer_phone }}</p>
+                                            <p class="text-xs text-rose-600" x-text="actionMsg"></p>
+                                            <template x-if="actionModal==='sms'">
+                                                <textarea x-model="smsBody" class="w-full border rounded-xl p-2 text-xs" rows="3" placeholder="نص الرسالة"></textarea>
+                                            </template>
+                                            <template x-if="actionModal==='whatsapp'">
+                                                <textarea x-model="waBody" class="w-full border rounded-xl p-2 text-xs" rows="3" placeholder="تفاصيل الحجز + رابط الزبون"></textarea>
+                                            </template>
+                                            <template x-if="actionModal==='credit'">
+                                                <input type="number" min="0.01" step="0.01" x-model.number="creditAmount" class="w-full border rounded-xl p-2 text-xs" placeholder="المبلغ">
+                                            </template>
+                                            <template x-if="actionModal==='points'">
+                                                <input type="number" min="1" x-model.number="pointsAmount" class="w-full border rounded-xl p-2 text-xs" placeholder="عدد النقاط">
+                                            </template>
+                                            <p x-show="customerLink" class="text-[10px] break-all bg-slate-50 p-2 rounded" x-text="customerLink"></p>
+                                            <div class="flex gap-2">
+                                                <button type="button" :disabled="actionBusy" class="flex-1 py-2 bg-indigo-600 text-white rounded-xl text-xs font-black"
+                                                    @click="runBookingAction({{ $booking->id }}, '{{ $booking->customer_phone }}', @js($booking->customer_name), $event)">تنفيذ</button>
+                                                <button type="button" class="px-4 py-2 bg-slate-100 rounded-xl text-xs font-black" @click="actionModal=null">إغلاق</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
                                 {{-- ===================== نافذة الفاتورة  ===================== --}}
                                 <template x-if="showInvoiceModal">
                                     <div @keydown.escape.window="showInvoiceModal = false"
@@ -1063,7 +1119,7 @@
                                         dir="rtl">
                                         <div class="max-w-4xl mx-auto">
                                             <div class="flex justify-between items-center mb-3 gap-3">
-                                                <h3 class="text-white font-black text-sm"> فاتورة رقم R{{ $booking->id }}
+                                                <h3 class="text-white font-black text-sm"> سند قبض رقم R{{ $booking->id }}
                                                 </h3>
                                                 <div class="flex gap-2">
                                                     <button type="button"
@@ -1473,12 +1529,30 @@
                                         class="bg-white w-full max-w-2xl rounded-[2rem] p-6 shadow-2xl border border-gray-50 text-right overflow-y-auto max-h-[90vh] custom-scrollbar">
 
                                         <div class="flex justify-between items-center border-b border-gray-100 pb-4 mb-4">
-                                            <h3 class="font-black text-gray-800 text-lg">تعديل ومراجعة الحجز
+                                            <h3 class="font-black text-gray-800 text-lg">تعديل الحجز
                                                 #BK-{{ $booking->id }}</h3>
                                             <button type="button" @click="showEditModal = false"
                                                 class="text-gray-400 hover:text-gray-600 font-bold text-xl">✕</button>
                                         </div>
 
+                                        <div class="mb-4" x-data="{ logs: [], loaded: false }" x-init="
+                                            fetch('{{ route('agency.bookings.changes', $booking) }}')
+                                                .then(r => r.json())
+                                                .then(d => { logs = d.data || d; loaded = true; })
+                                                .catch(() => loaded = true);
+                                        ">
+                                            <h4 class="text-xs font-black mb-2">سجل التعديلات</h4>
+                                            <div class="max-h-40 overflow-y-auto text-[11px] border rounded-xl">
+                                                <template x-for="log in logs" :key="log.id">
+                                                    <div class="p-2 border-b">
+                                                        <span class="font-black" x-text="log.performed_by"></span>
+                                                        — <span x-text="log.action"></span>
+                                                        <span class="text-slate-400" x-text="log.created_at"></span>
+                                                    </div>
+                                                </template>
+                                                <p x-show="loaded && !logs.length" class="p-2 text-slate-400">لا توجد تعديلات بعد</p>
+                                            </div>
+                                        </div>
                                         {{-- السعر الإجمالي (قبل خصم العمولة والمدفوع نقداً) --}}
                                         <div class="mb-4 bg-blue-600 text-white p-4 rounded-2xl shadow-md shadow-blue-100">
                                             <div class="flex justify-between items-center">
@@ -2128,6 +2202,55 @@
                 w.focus();
                 w.print();
             });
+        }
+
+        async function runBookingAction(bookingId, phone, name, ev) {
+            const ctx = Alpine.$data((ev || event).target.closest('[x-data]'));
+            if (!ctx) return;
+            ctx.actionBusy = true;
+            ctx.actionMsg = '';
+            const csrf = document.querySelector('meta[name="csrf-token"]').content;
+            const jsonHeaders = { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf, 'Accept': 'application/json' };
+            try {
+                if (ctx.actionModal === 'invoice') {
+                    const res = await fetch(`/agency/bookings/${bookingId}/invoice`, { method: 'POST', headers: jsonHeaders });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || 'تعذر إصدار الفاتورة');
+                    window.open(data.print_url, '_blank');
+                    ctx.actionModal = null;
+                } else if (ctx.actionModal === 'sms') {
+                    const res = await fetch(`/agency/bookings/${bookingId}/sms`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ phone, body: ctx.smsBody || `تأكيد الحجز #${bookingId} للعميل ${name}`, template_key: 'custom' }) });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || 'فشل الإرسال');
+                    ctx.actionMsg = 'تم قبول الرسالة من المزود';
+                } else if (ctx.actionModal === 'whatsapp') {
+                    const res = await fetch(`/agency/bookings/${bookingId}/whatsapp`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ phone, mode: 'manual', body: ctx.waBody || `تفاصيل حجزك رقم ${bookingId}` }) });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || 'فشل المشاركة');
+                    if (data.wa_url) window.open(data.wa_url, '_blank');
+                } else if (ctx.actionModal === 'link') {
+                    const res = await fetch(`/agency/bookings/${bookingId}/customer-link`, { method: 'POST', headers: jsonHeaders });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || 'تعذر إنشاء الرابط');
+                    ctx.customerLink = data.url;
+                    await navigator.clipboard.writeText(data.url);
+                    ctx.actionMsg = 'تم نسخ الرابط';
+                } else if (ctx.actionModal === 'credit') {
+                    const res = await fetch(`/agency/bookings/${bookingId}/credit`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ wallet_type: 'agency', amount: ctx.creditAmount, method: 'cash', reason: 'إضافة رصيد من الحجز', idempotency_key: 'CR-' + bookingId + '-' + Date.now() }) });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || 'تعذر إضافة الرصيد');
+                    ctx.actionMsg = 'تمت إضافة الرصيد';
+                } else if (ctx.actionModal === 'points') {
+                    const res = await fetch(`/agency/bookings/${bookingId}/points`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ points: ctx.pointsAmount, notes: 'صرف نقاط' }) });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.message || 'تعذر صرف النقاط');
+                    ctx.actionMsg = 'تم الصرف. الرصيد: ' + data.balance_after;
+                }
+            } catch (e) {
+                ctx.actionMsg = e.message;
+            } finally {
+                ctx.actionBusy = false;
+            }
         }
     </script>
 @endsection

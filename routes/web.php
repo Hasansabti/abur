@@ -22,6 +22,8 @@ use App\Http\Controllers\Agency\AgencyController;
 use App\Http\Controllers\Agency\AgencyEmployeeController;
 use App\Http\Controllers\Agency\WalletController;
 use App\Http\Controllers\Agency\BookingController;
+use App\Http\Controllers\Agency\BookingOperationsController;
+use App\Http\Controllers\Client\BookingShareController;
 use App\Http\Controllers\Agency\AgencyTripController;
 use App\Http\Controllers\Agency\SubscriptionController as AgencySubscriptionController;
 use App\Http\Controllers\SubscriptionWebhookController;
@@ -37,6 +39,8 @@ use App\Http\Controllers\ManagerController;
 Route::get('/', function () {
     return view('client.index');
 });
+
+Route::get('/b/{token}', [BookingShareController::class, 'show'])->name('booking.share');
 
 Route::post('/', [ClientController::class, 'authenticate'])->middleware('throttle:5,1')->name('client.auth.authenticate');
 
@@ -151,6 +155,19 @@ Route::prefix('agency')->name('agency.')->group(function () {
                 Route::post('/bookings/{booking}/extra-charge', [AgencyController::class, 'storeExtraCharge'])->name('bookings.extra_charge.store');
                 Route::post('/bookings/{booking}/note-handled', [AgencyController::class, 'noteHandled'])->name('bookings.note_handled');
                 Route::post('/extra-charges/{charge}/cancel', [AgencyController::class, 'cancelExtraCharge'])->name('extra_charge.cancel');
+
+                Route::get('/passengers/lookup', [BookingOperationsController::class, 'lookupPassenger'])->name('passengers.lookup');
+                Route::get('/companions', [BookingOperationsController::class, 'companions'])->name('companions.index');
+                Route::post('/companions', [BookingOperationsController::class, 'storeCompanion'])->name('companions.store');
+                Route::post('/discount-codes/preview', [BookingOperationsController::class, 'previewDiscount'])->name('discount.preview');
+                Route::post('/bookings/{booking}/invoice', [BookingOperationsController::class, 'issueInvoice'])->name('bookings.invoice.issue');
+                Route::get('/invoices/{invoice}/print', [BookingOperationsController::class, 'printInvoice'])->name('bookings.invoice.print');
+                Route::get('/bookings/{booking}/changes', [BookingOperationsController::class, 'changeLogs'])->name('bookings.changes');
+                Route::post('/bookings/{booking}/sms', [BookingOperationsController::class, 'sendSms'])->name('bookings.sms');
+                Route::post('/bookings/{booking}/credit', [BookingOperationsController::class, 'addCredit'])->name('bookings.credit');
+                Route::post('/bookings/{booking}/customer-link', [BookingOperationsController::class, 'customerLink'])->name('bookings.customer-link');
+                Route::post('/bookings/{booking}/whatsapp', [BookingOperationsController::class, 'shareWhatsapp'])->name('bookings.whatsapp');
+                Route::post('/bookings/{booking}/points', [BookingOperationsController::class, 'redeemPoints'])->name('bookings.points');
             });
 
             // === 4. إدارة الغرف والتوزيع (صلاحية: rooms) ===
@@ -184,6 +201,7 @@ Route::prefix('agency')->name('agency.')->group(function () {
                 Route::get('/flight/map', [AgencyController::class, 'flightmap'])->name('trips.flightmap');
                 Route::get('/reports', [AgencyController::class, 'reports'])->name('trips.reports');
                 Route::get('/reports/audit', [AgencyController::class, 'auditLogsIndex'])->name('reports.audit');
+                Route::get('/reports/meals', [BookingOperationsController::class, 'mealsReport'])->name('reports.meals');
             });
         });
     });

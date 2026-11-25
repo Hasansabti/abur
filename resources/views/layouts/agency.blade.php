@@ -39,6 +39,7 @@
         ['key' => 'reports', 'icon' => '📈', 'label' => 'التقارير والمالية', 'items' => [
             ['agency.reports.audit',        '📋', 'السجلات التدقيقية', 'reports'],
             ['agency.trips.reports',        '📊', 'التقارير',          'reports'],
+            ['agency.reports.meals',        '🍽', 'تقرير الوجبات',     'reports'],
             ['agency.subscription.index',   '💳', 'الاشتراك',          'finance'],
             ['agency.wallet.index',         '💰', 'السجلات المالية',   'finance'],
         ]],

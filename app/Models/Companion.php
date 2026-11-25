@@ -13,8 +13,12 @@ class Companion extends Model
         'birth_date',
         'dob_gregorian',    // التاريخ الميلادي
         'gender',
-        'id_document_path', // مسار صورة الهوية/المستند
+        'id_document_path',
         'relationship',
+        'nationality_code',
+        'identity_version',
+        'identity_issue_place',
+        'identity_expiry_date',
     ];
 
     protected function casts(): array
@@ -22,6 +26,7 @@ class Companion extends Model
         return [
             'birth_date' => 'date:Y-m-d',
             'dob_gregorian' => 'date',
+            'identity_expiry_date' => 'date',
         ];
     }
 

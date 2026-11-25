@@ -193,6 +193,10 @@
                             <input type="checkbox" name="permissions[]" value="reports" class="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
                             <span class="text-sm font-medium text-slate-700">التقارير</span>
                         </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="permissions[]" value="rooms" class="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
+                            <span class="text-sm font-medium text-slate-700">إدارة التسكين</span>
+                        </label>
 
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" name="permissions[]" value="employees" class="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
@@ -467,6 +471,11 @@
                         <label class="flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" name="permissions[]" value="reports" :checked="editData.permissions.includes('reports')" class="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
                             <span class="text-sm font-medium text-slate-700">التقارير</span>
+                        </label>
+
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="permissions[]" value="rooms" :checked="editData.permissions.includes('rooms')" class="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer">
+                            <span class="text-sm font-medium text-slate-700">إدارة التسكين</span>
                         </label>
 
                         <label class="flex items-center gap-2 cursor-pointer">

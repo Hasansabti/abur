@@ -74,6 +74,8 @@ class Trip extends Model
         'room_options',
         'meal_options',
         'extra_services',
+        'extra_bed_price',
+        'max_extra_beds',
         'bank_accounts',
 
         //حق الرحلة الاحتياطية
@@ -112,6 +114,7 @@ class Trip extends Model
             'room_options' => 'array',
             'meal_options' => 'array',
             'extra_services' => 'array',
+            'extra_bed_price' => 'decimal:2',
         ];
     }
 

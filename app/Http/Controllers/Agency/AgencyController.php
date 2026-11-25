@@ -407,7 +407,7 @@ class AgencyController extends Controller
             ->whereHas('trip', function ($query) use ($agencyId) {
                 $query->where('agency_id', $agencyId);
             })
-            ->with(['trip', 'bookingSeats.room', 'extraCharges']);
+            ->with(['trip', 'bookingSeats.room', 'extraCharges', 'invoices', 'user', 'customServices']);
 
         $search = trim($request->input('x_search', $request->input('search')));
 
@@ -802,6 +802,25 @@ class AgencyController extends Controller
                 'description'    => $logDescription,
                 'operator_name'  => $this->getOperatorName(),
             ]);
+
+            app(\App\Services\BookingChangeLogger::class)->log(
+                $booking,
+                'booking_updated',
+                [
+                    'customer_name' => $oldCustomerName,
+                    'status' => $oldStatus,
+                    'payment_status' => $oldPaymentStatus,
+                    'total_amount' => $oldTotalAmount,
+                ],
+                [
+                    'customer_name' => $booking->customer_name,
+                    'status' => $booking->status,
+                    'payment_status' => $booking->payment_status,
+                    'total_amount' => $newTotalAmount,
+                    'room_changes' => $roomChangesDetails,
+                ],
+                ['source' => 'agency']
+            );
         });
 
         return redirect()->back()->with('success', 'تم تحديث الحجز بنجاح.');
@@ -983,6 +1002,15 @@ class AgencyController extends Controller
 
                 $trip->save();
             }
+
+            app(\App\Services\LoyaltyService::class)->refund($booking, $this->getOperatorName());
+            app(\App\Services\BookingChangeLogger::class)->log(
+                $booking,
+                'booking_cancelled',
+                ['status' => $booking->status, 'payment_status' => $booking->payment_status],
+                ['status' => 'cancelled', 'payment_status' => $paymentStatus],
+                ['force' => true, 'source' => 'agency']
+            );
 
             // 5. تحديث حالة الحجز وتصفير القيم
             $booking->update([
@@ -1675,7 +1703,7 @@ class AgencyController extends Controller
 
                         $actualType = $roomObj?->room_type ?? $type;
                         $actualCapacity = $typeToCapacity[$actualType] ?? $capacity;
-                        $occupiedCount = $seatsInRoom->count();
+                        $occupiedCount = $seatsInRoom->filter(fn($seat) => $seat->isActualGuest())->count();
                         $isFull = ($occupiedCount >= $actualCapacity);
 
                         $bookingIds = $seatsInRoom->pluck('booking_id')->filter()->unique();

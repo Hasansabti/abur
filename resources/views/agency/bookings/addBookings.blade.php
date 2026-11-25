@@ -506,6 +506,28 @@
                             passengerNames: {},
                             passengerIds: {},
                             passengerGenders: {},
+                            passengerNationalities: {},
+                            passengerIdentityVersions: {},
+                            passengerIssuePlaces: {},
+                            passengerExpiryDates: {},
+                            passengerBirthDates: {},
+                            passengerCompanionIds: {},
+                            passengerBedTypes: {},
+                            passengerExtraBeds: {},
+                            nationalityList: @json($nationalities ?? []),
+                            nationalityQuery: '',
+                            companionList: [],
+                            ownerUserId: null,
+                            newCompanion: { name: '', national_id: '', gender: 'male', birth_date: '', relationship: '' },
+                            companionOpen: false,
+                            customServices: [],
+                            discountCode: '',
+                            discountAmount: 0,
+                            discountMessage: '',
+                            discountApplying: false,
+                            extraBedPrice: Number({{ (float) ($extra_bed_price ?? 0) }}) || 0,
+                            maxExtraBeds: Number({{ (int) ($max_extra_beds ?? 1) }}) || 1,
+                            confirmPartial: false,
 
                             seatRoomAssignments: {},
                             seatPackageSelection: {},
@@ -722,6 +744,149 @@
                                 if (!this.passengerExtraSeats[seatId]) {
                                     this.passengerExtraSeats[seatId] = [];
                                 }
+                                if (typeof this.passengerNationalities[seatId] === 'undefined') this.passengerNationalities[seatId] = 'SA';
+                                if (typeof this.passengerIdentityVersions[seatId] === 'undefined') this.passengerIdentityVersions[seatId] = '';
+                                if (typeof this.passengerIssuePlaces[seatId] === 'undefined') this.passengerIssuePlaces[seatId] = '';
+                                if (typeof this.passengerExpiryDates[seatId] === 'undefined') this.passengerExpiryDates[seatId] = '';
+                                if (typeof this.passengerBirthDates[seatId] === 'undefined') this.passengerBirthDates[seatId] = '';
+                                if (typeof this.passengerCompanionIds[seatId] === 'undefined') this.passengerCompanionIds[seatId] = '';
+                                if (typeof this.passengerBedTypes[seatId] === 'undefined') this.passengerBedTypes[seatId] = '';
+                                if (typeof this.passengerExtraBeds[seatId] === 'undefined') this.passengerExtraBeds[seatId] = 0;
+                            },
+
+                            filteredNationalities() {
+                                const q = (this.nationalityQuery || '').toLowerCase();
+                                return (this.nationalityList || []).filter(n => !q || (n.name_ar + n.name_en + n.code).toLowerCase().includes(q));
+                            },
+                            isIdentityExpired(seat) {
+                                const d = this.passengerExpiryDates[seat];
+                                return d && new Date(d) < new Date(new Date().toDateString());
+                            },
+                            mealPackageDetails(seat) {
+                                const a = this.seatRoomAssignments[seat];
+                                if (['single','double','triple','quad'].includes(a) && this.seatPackageSelection[seat] === 'package' && this.roomPackages[a]) {
+                                    const p = this.roomPackages[a];
+                                    return { name: p.name, price: p.price || 0, breakfast: !!p.meals?.breakfast, lunch: !!p.meals?.lunch, dinner: !!p.meals?.dinner };
+                                }
+                                const meals = this.passengerMeals[seat] || {};
+                                let price = 0;
+                                ['breakfast','lunch','dinner'].forEach(m => { if (meals[m]) price += this.getMealPrice(seat, m); });
+                                return { name: 'وجبات فردية', price, breakfast: !!meals.breakfast, lunch: !!meals.lunch, dinner: !!meals.dinner };
+                            },
+                            addCustomService() {
+                                this.customServices.push({ name: '', description: '', quantity: 1, unit_price: 0 });
+                            },
+                            removeCustomService(i) {
+                                this.customServices.splice(i, 1);
+                            },
+                            customServicesTotal() {
+                                return this.customServices.reduce((s, x) => s + (Number(x.quantity)||0) * (Number(x.unit_price)||0), 0);
+                            },
+                            extraBedsTotal() {
+                                return this.selectedSeats.reduce((s, seat) => s + (Number(this.passengerExtraBeds[seat])||0) * this.extraBedPrice, 0);
+                            },
+                            grossTotal() {
+                                return Number(this.calculateBaseTotal()) + this.customServicesTotal() + this.extraBedsTotal();
+                            },
+                            netTotal() {
+                                return Math.max(0, this.grossTotal() - (Number(this.discountAmount)||0));
+                            },
+                            paymentState() {
+                                const due = this.netTotal();
+                                const paid = Number(this.calculateTotalPaid())||0;
+                                if (paid <= 0) return { label: 'غير مدفوع', remaining: due, over: 0 };
+                                if (paid + 0.009 < due) return { label: 'مدفوع جزئياً', remaining: due - paid, over: 0 };
+                                if (paid > due + 0.009) return { label: 'مبلغ زائد يحتاج معالجة', remaining: 0, over: paid - due };
+                                return { label: 'مدفوع بالكامل', remaining: 0, over: 0 };
+                            },
+                            async lookupCurrentPassenger() {
+                                const id = this.passengerIds[this.activeModalSeat];
+                                if (!id || String(id).length < 8) return;
+                                try {
+                                    const res = await fetch(`{{ route('agency.passengers.lookup') }}?national_id=${encodeURIComponent(id)}`);
+                                    const data = await res.json();
+                                    const src = data.user || data.companion;
+                                    if (src) this.applyPersonToSeat(this.activeModalSeat, src, data.user?.id ? null : src.id);
+                                    this.companionList = data.companions || [];
+                                    this.ownerUserId = data.user?.id || this.ownerUserId;
+                                } catch (e) {}
+                            },
+                            applyPersonToSeat(seat, person, companionId = null) {
+                                this.passengerNames[seat] = person.name || this.passengerNames[seat];
+                                this.passengerIds[seat] = person.national_id || this.passengerIds[seat];
+                                this.passengerGenders[seat] = person.gender || this.passengerGenders[seat];
+                                if (person.birth_date) this.passengerBirthDates[seat] = person.birth_date;
+                                if (person.nationality_code) this.passengerNationalities[seat] = person.nationality_code;
+                                if (person.identity_version) this.passengerIdentityVersions[seat] = person.identity_version;
+                                if (person.identity_issue_place) this.passengerIssuePlaces[seat] = person.identity_issue_place;
+                                if (person.identity_expiry_date) this.passengerExpiryDates[seat] = person.identity_expiry_date;
+                                this.passengerCompanionIds[seat] = companionId || '';
+                            },
+                            companionAlreadyUsed(id) {
+                                return Object.values(this.passengerCompanionIds).map(String).includes(String(id));
+                            },
+                            async createCompanion() {
+                                if (!this.newCompanion.name || !this.newCompanion.national_id) {
+                                    alert('أدخل اسم التابع ورقم الهوية.');
+                                    return;
+                                }
+                                try {
+                                    const res = await fetch('{{ route("agency.companions.store") }}', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content, 'Accept': 'application/json' },
+                                        body: JSON.stringify({
+                                            user_id: this.ownerUserId,
+                                            national_id_owner: this.passengerIds[this.activeModalSeat],
+                                            ...this.newCompanion
+                                        })
+                                    });
+                                    const data = await res.json();
+                                    if (!res.ok) {
+                                        alert(data.message || 'تعذر إنشاء التابع');
+                                        return;
+                                    }
+                                    this.companionList.push(data.companion);
+                                    this.applyCompanion(data.companion);
+                                    this.newCompanion = { name: '', national_id: '', gender: 'male', birth_date: '', relationship: '' };
+                                } catch (e) {
+                                    alert('تعذر إنشاء التابع');
+                                }
+                            },
+                            applyCompanion(c) {
+                                if (this.companionAlreadyUsed(c.id) && String(this.passengerCompanionIds[this.activeModalSeat]) !== String(c.id)) {
+                                    alert('هذا التابع مضاف بالفعل إلى الحجز.');
+                                    return;
+                                }
+                                this.applyPersonToSeat(this.activeModalSeat, c, c.id);
+                                this.companionOpen = false;
+                            },
+                            async applyDiscount() {
+                                this.discountApplying = true;
+                                this.discountMessage = '';
+                                try {
+                                    const res = await fetch('{{ route("agency.discount.preview") }}', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content },
+                                        body: JSON.stringify({ code: this.discountCode, amount: this.grossTotal(), trip_id: {{ $trip->id ?? 'null' }}, customer_phone: this.customerPhone })
+                                    });
+                                    const data = await res.json();
+                                    if (!data.ok) {
+                                        this.discountAmount = 0;
+                                        this.discountMessage = data.message || 'تعذر تطبيق الكود';
+                                    } else {
+                                        this.discountAmount = Number(data.amount)||0;
+                                        this.discountMessage = data.message;
+                                    }
+                                } catch (e) {
+                                    this.discountMessage = 'تعذر الاتصال بالخادم';
+                                } finally {
+                                    this.discountApplying = false;
+                                }
+                            },
+                            clearDiscount() {
+                                this.discountCode = '';
+                                this.discountAmount = 0;
+                                this.discountMessage = '';
                             },
 
                             getAvailableExtraSeats() {
@@ -1017,7 +1182,7 @@
                                 return parseFloat(rp?.[type]) || parseFloat(this.prices[type]) || 0;
                             },
 
-                            calculateTotal() {
+                            calculateBaseTotal() {
                                 const privateKeys = ['single', 'double', 'triple', 'quad'];
                                 let total = 0;
 
@@ -1025,20 +1190,19 @@
                                     const a = this.seatRoomAssignments[seat];
 
                                     if (a === 'additional') {
-                                        total += this.prices.seat || 0; // مقعد إضافي: بدون وجبات أو خدمات
+                                        total += this.prices.seat || 0;
                                         return;
                                     }
 
                                     if (privateKeys.includes(a)) {
-                                        total += this.getRoomPrice(a); // لكل مسافر في غرفة خاصة
+                                        total += this.getRoomPrice(a);
                                     } else if (a === 'shared') {
                                         const t = this.sharedRoomTypes[seat];
                                         total += t ? this.getSharedPrice(t) : 0;
                                     } else {
-                                        total += this.prices.seat || 0; // بدون سكن صالح
+                                        total += this.prices.seat || 0;
                                     }
 
-                                    // الوجبات
                                     if (privateKeys.includes(a) && this.seatPackageSelection[seat] ===
                                         'package' && this.roomPackages[a]) {
                                         total += this.roomPackages[a].price || 0;
@@ -1049,7 +1213,6 @@
                                         });
                                     }
 
-                                    // الخدمات
                                     if (this.passengerServices[seat]) {
                                         this.extraServices.forEach((srv, idx) => {
                                             if (this.passengerServices[seat][idx]) total +=
@@ -1059,6 +1222,9 @@
                                 });
 
                                 return total;
+                            },
+                            calculateTotal() {
+                                return this.netTotal();
                             },
 
                             getMealsSummary() {
@@ -1309,6 +1475,42 @@
 
                                 this.$refs.inputPayments.value = JSON.stringify(this.payments);
 
+                                const profiles = {};
+                                const beds = {};
+                                const extraBeds = {};
+                                for (let seat of mainSeatsOnly) {
+                                    profiles[seat] = {
+                                        name: this.passengerNames[seat] || '',
+                                        national_id: this.passengerIds[seat] || '',
+                                        gender: this.passengerGenders[seat] || 'male',
+                                        nationality_code: this.passengerNationalities[seat] || '',
+                                        identity_version: this.passengerIdentityVersions[seat] || '',
+                                        identity_issue_place: this.passengerIssuePlaces[seat] || '',
+                                        identity_expiry_date: this.passengerExpiryDates[seat] || '',
+                                        date_of_birth: this.passengerBirthDates[seat] || '',
+                                        companion_id: this.passengerCompanionIds[seat] || null,
+                                        bed_type: this.passengerBedTypes[seat] || '',
+                                        extra_bed_quantity: Number(this.passengerExtraBeds[seat]) || 0,
+                                    };
+                                    beds[seat] = this.passengerBedTypes[seat] || '';
+                                    extraBeds[seat] = Number(this.passengerExtraBeds[seat]) || 0;
+                                }
+                                this.$refs.inputPassengerProfiles.value = JSON.stringify(profiles);
+                                this.$refs.inputBedTypes.value = JSON.stringify(beds);
+                                this.$refs.inputExtraBeds.value = JSON.stringify(extraBeds);
+                                this.$refs.inputCustomServices.value = JSON.stringify(this.customServices);
+                                this.$refs.inputDiscountCode.value = this.discountCode || '';
+                                if (this.$refs.inputConfirmPartial) this.$refs.inputConfirmPartial.value = this.confirmPartial ? '1' : '0';
+
+                                const payState = this.paymentState();
+                                if (payState.remaining > 0 && !this.confirmPartial) {
+                                    if (!confirm('يوجد مبلغ متبقٍ ' + payState.remaining.toLocaleString() + ' ر.س. هل تعتمد الحجز غير مكتمل الدفع؟')) {
+                                        e.preventDefault();
+                                        return false;
+                                    }
+                                    this.confirmPartial = true;
+                                    if (this.$refs.inputConfirmPartial) this.$refs.inputConfirmPartial.value = '1';
+                                }
 
                                 return true;
                             }
@@ -1376,6 +1578,12 @@
                             <input type="hidden" x-ref="inputParentSeats" name="parent_seats">
                             <input type="hidden" x-ref="inputPayments" name="payments_data">
                             <input type="hidden" x-ref="inputSharedRoomTypes" name="shared_room_types">
+                            <input type="hidden" x-ref="inputPassengerProfiles" name="passenger_profiles">
+                            <input type="hidden" x-ref="inputBedTypes" name="passenger_bed_types">
+                            <input type="hidden" x-ref="inputExtraBeds" name="passenger_extra_beds">
+                            <input type="hidden" x-ref="inputCustomServices" name="custom_services">
+                            <input type="hidden" x-ref="inputDiscountCode" name="discount_code">
+                            <input type="hidden" x-ref="inputConfirmPartial" name="confirm_partial_payment" value="0">
 
                             {{-- الشق الأيمن --}}
                             <div class="flex-1 overflow-y-auto space-y-4 pr-1 pl-3" style="scrollbar-width: thin;">
@@ -1705,12 +1913,36 @@
                                 </div>
 
 
+                                <div class="bg-white border border-slate-100 rounded-2xl p-3 space-y-2">
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-[11px] font-black">خدمات مخصصة</span>
+                                        <button type="button" @click="addCustomService()" class="text-[10px] font-black text-indigo-600">+ إضافة خدمة مخصصة</button>
+                                    </div>
+                                    <template x-for="(svc, i) in customServices" :key="i">
+                                        <div class="grid grid-cols-12 gap-1">
+                                            <input class="col-span-4 text-[10px] border rounded-lg px-2 py-1" placeholder="الاسم" x-model="svc.name">
+                                            <input class="col-span-3 text-[10px] border rounded-lg px-2 py-1" placeholder="وصف" x-model="svc.description">
+                                            <input type="number" min="1" class="col-span-2 text-[10px] border rounded-lg px-2 py-1" x-model.number="svc.quantity">
+                                            <input type="number" min="0" step="0.01" class="col-span-2 text-[10px] border rounded-lg px-2 py-1" x-model.number="svc.unit_price">
+                                            <button type="button" class="col-span-1 text-rose-500 text-xs" @click="removeCustomService(i)">×</button>
+                                        </div>
+                                    </template>
+                                </div>
+                                <div class="bg-white border border-slate-100 rounded-2xl p-3 space-y-2">
+                                    <label class="text-[11px] font-black">كود الخصم</label>
+                                    <div class="flex gap-2">
+                                        <input x-model="discountCode" class="flex-1 text-xs border rounded-xl px-2 py-2" placeholder="CODE">
+                                        <button type="button" @click="applyDiscount()" :disabled="discountApplying" class="px-3 py-2 bg-amber-500 text-white rounded-xl text-[10px] font-black">تطبيق</button>
+                                        <button type="button" @click="clearDiscount()" class="px-3 py-2 bg-slate-100 rounded-xl text-[10px] font-black">إزالة</button>
+                                    </div>
+                                    <p class="text-[10px] font-bold" :class="discountAmount>0 ? 'text-emerald-600' : 'text-rose-600'" x-text="discountMessage"></p>
+                                </div>
+
                                 {{-- كرت التكلفة الاجمالية --}}
                                 <div class="bg-blue-900 text-white rounded-2xl p-4 space-y-3 shadow-lg shadow-blue-900/20">
                                     <div class="flex items-center justify-between">
                                         <div class="space-y-0.5">
-                                            <span class="text-[10px] font-bold text-blue-200 block">إجمالي قيمة الفاتورة
-                                                النهائية</span>
+                                            <span class="text-[10px] font-bold text-blue-200 block">ملخص مالي — صافي الفاتورة</span>
                                             <span class="text-xs font-bold text-white block">المقاعد المحجوزة: <span
                                                     x-text="selectedSeats.length"
                                                     class="font-mono text-amber-300 font-black"></span> تذاكر</span>
@@ -1722,23 +1954,18 @@
                                         </div>
                                     </div>
 
-                                    <template x-if="calculateTotalPaid() > 0">
-                                        <div class="pt-2 border-t border-blue-800/80 space-y-1 text-xs">
-                                            <div class="flex justify-between text-emerald-300 font-bold">
-                                                <span>💵 إجمالي المدفوع الآن:</span>
-                                                <span class="font-mono"
-                                                    x-text="(calculateTotalPaid() || 0).toLocaleString() + ' ر.س'"></span>
-                                            </div>
-                                            <div class="flex justify-between font-black"
-                                                :class="(calculateTotal() - calculateTotalPaid()) > 0 ? 'text-rose-300' :
-                                                    'text-slate-300'">
-                                                <span
-                                                    x-text="(calculateTotal() - calculateTotalPaid()) > 0 ? '💳 المتبقي (غير مدفوع):' : '💳 المتبقي للدفع (مكتمل):'"></span>
-                                                <span class="font-mono text-sm"
-                                                    x-text="Math.max(0, (Number(calculateTotal()) || 0) - (Number(calculateTotalPaid()) || 0)).toLocaleString() + ' ر.س'"></span>
-                                            </div>
+                                    <div class="pt-2 border-t border-blue-800/80 space-y-1 text-[11px]">
+                                        <div class="flex justify-between"><span>قبل الخصم</span><span x-text="grossTotal().toLocaleString()"></span></div>
+                                        <div class="flex justify-between"><span>الخصومات</span><span x-text="(Number(discountAmount)||0).toLocaleString()"></span></div>
+                                        <div class="flex justify-between"><span>الضرائب</span><span>0</span></div>
+                                        <div class="flex justify-between font-black"><span>الصافي</span><span x-text="netTotal().toLocaleString()"></span></div>
+                                        <div class="flex justify-between text-emerald-300"><span>المدفوع</span><span x-text="(calculateTotalPaid()||0).toLocaleString()"></span></div>
+                                        <div class="flex justify-between font-black" :class="paymentState().remaining>0 ? 'text-rose-300' : 'text-slate-300'">
+                                            <span>المتبقي</span><span x-text="paymentState().remaining.toLocaleString()"></span>
                                         </div>
-                                    </template>
+                                        <div class="flex justify-between" x-show="paymentState().over>0"><span>مبلغ زائد</span><span x-text="paymentState().over.toLocaleString()"></span></div>
+                                        <div class="text-amber-200 font-black" x-text="'حالة الدفع: ' + paymentState().label"></div>
+                                    </div>
                                 </div>
 
                                 <div class="pt-1">
@@ -1999,7 +2226,8 @@
                                                 <label
                                                     class="text-[10px] text-slate-400 font-black block mb-1 uppercase tracking-wider">رقم
                                                     الهوية / الإقامة:</label>
-                                                <input type="text" x-model="passengerIds[activeModalSeat]"
+                                                    <input type="text" x-model="passengerIds[activeModalSeat]"
+                                                    @blur="lookupCurrentPassenger()"
                                                     @input="passengerIds[activeModalSeat] = $event.target.value.replace(/[^0-9]/g, '').slice(0, 10)"
                                                     placeholder="10 أرقام فقط" maxlength="10" minlength="10" required
                                                     inputmode="numeric" pattern="[0-9]{10}"
@@ -2007,6 +2235,68 @@
                                             </div>
 
                                             <div>
+                                                <label class="text-[10px] text-slate-400 font-black block mb-1">الجنسية</label>
+                                                <input type="text" x-model="nationalityQuery" placeholder="بحث..." class="w-full text-[10px] mb-1 px-2 py-1 rounded-lg border">
+                                                <select x-model="passengerNationalities[activeModalSeat]" class="w-full text-xs bg-slate-50 border rounded-xl px-2 py-2">
+                                                    <template x-for="n in filteredNationalities()" :key="n.code">
+                                                        <option :value="n.code" x-text="n.name_ar"></option>
+                                                    </template>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div class="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label class="text-[10px] text-slate-400 font-black block mb-1">رقم النسخة</label>
+                                                <input type="text" x-model="passengerIdentityVersions[activeModalSeat]" class="w-full text-xs bg-slate-50 border rounded-xl px-2 py-2 font-mono" placeholder="001">
+                                            </div>
+                                            <div>
+                                                <label class="text-[10px] text-slate-400 font-black block mb-1">مصدر الإصدار</label>
+                                                <input type="text" x-model="passengerIssuePlaces[activeModalSeat]" class="w-full text-xs bg-slate-50 border rounded-xl px-2 py-2">
+                                            </div>
+                                            <div>
+                                                <label class="text-[10px] text-slate-400 font-black block mb-1">انتهاء الوثيقة</label>
+                                                <input type="date" x-model="passengerExpiryDates[activeModalSeat]" class="w-full text-xs bg-slate-50 border rounded-xl px-2 py-2">
+                                                <p x-show="isIdentityExpired(activeModalSeat)" class="text-[10px] text-amber-600 font-black mt-1">تنبيه: الوثيقة منتهية. يمكن المتابعة ما لم تمنع سياسة الرحلة ذلك.</p>
+                                            </div>
+                                            <div>
+                                                <label class="text-[10px] text-slate-400 font-black block mb-1">تاريخ الميلاد</label>
+                                                <input type="date" x-model="passengerBirthDates[activeModalSeat]" :max="new Date().toISOString().slice(0,10)" class="w-full text-xs bg-slate-50 border rounded-xl px-2 py-2">
+                                            </div>
+                                        </div>
+
+                                        <div class="flex gap-2">
+                                            <button type="button" @click="lookupCurrentPassenger()" class="flex-1 py-2 text-[11px] font-black bg-slate-100 rounded-xl">تعبئة من عميل مسجل</button>
+                                            <button type="button" @click="companionOpen = !companionOpen; lookupCurrentPassenger()" class="flex-1 py-2 text-[11px] font-black bg-indigo-50 text-indigo-700 rounded-xl">اختيار تابع</button>
+                                        </div>
+                                        <div x-show="companionOpen" class="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 space-y-2">
+                                            <p class="text-[10px] font-black text-indigo-800">التابعون المرتبطون بالعميل (راكب مستقل، ليس مقعداً إضافياً)</p>
+                                            <template x-if="!companionList.length">
+                                                <p class="text-[10px] text-slate-500">لا يوجد تابعون. أدخل هوية عميل مسجل أولاً.</p>
+                                            </template>
+                                            <template x-for="c in companionList" :key="c.id">
+                                                <button type="button" @click="applyCompanion(c)" class="w-full text-right p-2 bg-white rounded-lg text-xs font-bold border">
+                                                    <span x-text="c.name"></span>
+                                                    <span class="text-slate-400" x-text="' — ' + (c.relationship || '')"></span>
+                                                </button>
+                                            </template>
+                                            <div class="border-t border-indigo-100 pt-2 space-y-1">
+                                                <p class="text-[10px] font-black">إنشاء تابع جديد</p>
+                                                <input class="w-full text-[10px] border rounded-lg px-2 py-1" placeholder="الاسم" x-model="newCompanion.name">
+                                                <input class="w-full text-[10px] border rounded-lg px-2 py-1 font-mono" placeholder="رقم الهوية" x-model="newCompanion.national_id">
+                                                <div class="grid grid-cols-2 gap-1">
+                                                    <input type="date" class="text-[10px] border rounded-lg px-2 py-1" x-model="newCompanion.birth_date">
+                                                    <input class="text-[10px] border rounded-lg px-2 py-1" placeholder="صلة القرابة" x-model="newCompanion.relationship">
+                                                </div>
+                                                <select class="w-full text-[10px] border rounded-lg px-2 py-1" x-model="newCompanion.gender">
+                                                    <option value="male">ذكر</option>
+                                                    <option value="female">أنثى</option>
+                                                </select>
+                                                <button type="button" class="w-full py-1.5 bg-indigo-600 text-white rounded-lg text-[10px] font-black" @click="createCompanion()">حفظ التابع وتعبئة المقعد</button>
+                                            </div>
+                                        </div>
+
+                                        <div>
                                                 <label
                                                     class="text-[10px] text-slate-400 font-black block mb-1 uppercase tracking-wider">الجنس:</label>
                                                 <div class="grid gap-2"
@@ -2219,6 +2509,16 @@
                                                     </template>
                                                 </div>
 
+                                                <div class="mt-3 p-3 bg-white rounded-xl border space-y-2" x-show="seatRoomAssignments[activeModalSeat] !== 'shared'">
+                                                    <label class="text-[11px] font-bold text-slate-600">نوع السرير (مستقل عن سعة الغرفة)</label>
+                                                    <div class="grid grid-cols-2 gap-2">
+                                                        <button type="button" @click="passengerBedTypes[activeModalSeat] = 'single'" class="py-2 rounded-xl border text-xs font-black" :class="passengerBedTypes[activeModalSeat]==='single' ? 'bg-indigo-600 text-white' : 'bg-white'">سرير مفرد</button>
+                                                        <button type="button" @click="passengerBedTypes[activeModalSeat] = 'double'" class="py-2 rounded-xl border text-xs font-black" :class="passengerBedTypes[activeModalSeat]==='double' ? 'bg-indigo-600 text-white' : 'bg-white'">سرير مزدوج</button>
+                                                    </div>
+                                                    <label class="text-[11px] font-bold text-slate-600 block">سرير إضافي (حتى {{ (int) ($max_extra_beds ?? 1) }})</label>
+                                                    <input type="number" min="0" :max="maxExtraBeds" x-model.number="passengerExtraBeds[activeModalSeat]" class="w-full text-xs border rounded-xl px-2 py-2">
+                                                    <p class="text-[10px] text-slate-500">سعر السرير الإضافي: <span x-text="extraBedPrice"></span> ر.س</p>
+                                                </div>
                                                 <template
                                                     x-if="['single', 'double', 'triple', 'quad'].includes(seatRoomAssignments[activeModalSeat]) && roomPackages[seatRoomAssignments[activeModalSeat]]">
                                                     <div

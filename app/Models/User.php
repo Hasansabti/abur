@@ -32,7 +32,9 @@ class User extends Authenticatable
         'phone',
         'gender',
         'national_id',
-        'birth_date_hijri'
+        'birth_date_hijri',
+        'nationality_code',
+        'loyalty_points',
     ];
 
     /**
@@ -57,6 +59,8 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'tour_seen' => 'boolean',
+            'birth_date' => 'date',
+            'loyalty_points' => 'integer',
         ];
     }
 

@@ -42,7 +42,17 @@ class Booking extends Model
         'room_bed_types',
         'agency_note',
         'agency_note_status',
-
+        'discount_code',
+        'discount_amount',
+        'points_redeemed',
+        'points_value',
+        'subtotal_amount',
+        'tax_amount',
+        'booked_by_agency',
+        'room_quantities',
+        'room_assignments',
+        'passenger_meals',
+        'extra_services',
     ];
 
     protected function casts(): array
@@ -55,7 +65,14 @@ class Booking extends Model
             'expires_at' => 'datetime',
             'trip_completed_at' => 'datetime',
             'room_bed_types' => 'array',
-
+            'discount_amount' => 'decimal:2',
+            'points_value' => 'decimal:2',
+            'subtotal_amount' => 'decimal:2',
+            'tax_amount' => 'decimal:2',
+            'room_quantities' => 'array',
+            'room_assignments' => 'array',
+            'passenger_meals' => 'array',
+            'extra_services' => 'array',
         ];
     }
     public function extraCharges(): HasMany
@@ -129,5 +146,41 @@ class Booking extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(AgencyTransaction::class);
+    }
+
+    public function customServices(): HasMany
+    {
+        return $this->hasMany(BookingCustomService::class);
+    }
+
+    public function invoices(): HasMany
+    {
+        return $this->hasMany(BookingInvoice::class);
+    }
+
+    public function changeLogs(): HasMany
+    {
+        return $this->hasMany(BookingChangeLog::class);
+    }
+
+    public function messageLogs(): HasMany
+    {
+        return $this->hasMany(BookingMessageLog::class);
+    }
+
+    public function accessTokens(): HasMany
+    {
+        return $this->hasMany(BookingAccessToken::class);
+    }
+
+    public function actualGuests()
+    {
+        return $this->bookingSeats()->where(function ($q) {
+            $q->where('is_extra', false)->orWhereNull('is_extra');
+        })->where(function ($q) {
+            $q->whereNull('parent_seat_id')->orWhere('parent_seat_id', 0);
+        })->where(function ($q) {
+            $q->whereNull('room_type')->orWhere('room_type', '!=', 'additional');
+        });
     }
 }

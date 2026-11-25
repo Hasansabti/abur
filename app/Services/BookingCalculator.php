@@ -7,7 +7,7 @@ class BookingCalculator
     /**
      * الحسبة المالية الشاملة والمؤمنة للغرف والمقاعد والوجبات والخدمات الإضافية
      */
-    public static function calculate($trip, $room_quantities, $selected_seats, $roomAssignments, $passenger_meals, $passenger_services = [])
+    public static function calculate($trip, $room_quantities, $selected_seats, $roomAssignments, $passenger_meals, $passenger_services = [], array $extras = [])
     {
         // 1. دالة معالجة وفك تشفير JSON والمصفوفات الممررة
         $parseJsonOrArray = function ($input) {
@@ -345,9 +345,25 @@ class BookingCalculator
             }
         }
 
+        $total_extra_beds_cost = 0;
+        $extraBeds = is_array($extras['extra_beds'] ?? null) ? $extras['extra_beds'] : [];
+        $extraBedPrice = floatval($trip->extra_bed_price ?? ($extras['extra_bed_price'] ?? 0));
+        foreach ($extraBeds as $qty) {
+            $total_extra_beds_cost += max(0, (int) $qty) * $extraBedPrice;
+        }
+
+        $total_custom_services_cost = 0;
+        foreach (($extras['custom_services'] ?? []) as $svc) {
+            $qty = max(0, (int) ($svc['quantity'] ?? 0));
+            $price = floatval($svc['unit_price'] ?? $svc['price'] ?? 0);
+            $total_custom_services_cost += $qty * $price;
+        }
+
+        $codeDiscount = floatval($extras['discount_code_amount'] ?? 0);
+
         // 💳 8. الإجمالي النهائي
-        $subtotal_before_discount = $total_room_cost + $total_seats_cost + $total_meals_cost + $total_services_cost;
-        $total_price = max(0, $subtotal_before_discount - $total_accommodation_discount);
+        $subtotal_before_discount = $total_room_cost + $total_seats_cost + $total_meals_cost + $total_services_cost + $total_extra_beds_cost + $total_custom_services_cost;
+        $total_price = max(0, $subtotal_before_discount - $total_accommodation_discount - $codeDiscount);
         return [
     'room_prices'                    => $room_prices,
     'price_all_meals'                => $price_all_meals,
@@ -359,6 +375,9 @@ class BookingCalculator
     'total_meals_cost'               => $total_meals_cost,
     'total_services_cost'            => $total_services_cost,
     'total_accommodation_discount'   => $total_accommodation_discount,   // ✅ جديد
+    'total_extra_beds_cost'          => $total_extra_beds_cost,
+    'total_custom_services_cost'     => $total_custom_services_cost,
+    'discount_code_amount'           => $codeDiscount,
     'total_price'                    => $total_price,
     'extra_seats_count'              => $extraSeatsCount,
     'allowed_free_seats'             => $allowedFreeSeats,
