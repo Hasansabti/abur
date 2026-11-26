@@ -9,17 +9,23 @@ use App\Models\Agency;
 use App\Models\Booking;
 use App\Models\TripSeatLog;
 use App\Models\User;
+use App\Models\AuditLog;
 
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class AdminController extends Controller
 {
     public function index()
     {
-        // 1. جلب بيانات بطاقات الإحصائيات 
+        // 1. جلب بيانات بطاقات الإحصائيات
         $totalSales = Booking::where('payment_status', 'paid')->sum('total_amount');
-        $seatLogs = TripSeatLog::with('trip')->latest()->get();
+
+        // آخر 20 عملية إزاحة مقاعد (تُستخدم في صندوق الإشعارات)
+        $seatLogs = TripSeatLog::with('trip')->latest()->take(20)->get();
 
         $activeAgenciesCount = Agency::where('status', 'active')->count();
         $pendingAgenciesCount = Agency::where('status', 'pending')->count();
@@ -32,10 +38,24 @@ class AdminController extends Controller
 
         // 2. جلب القوائم بانتظار الاعتماد
         $pendingTrips = Trip::with('agency')->whereIn('status', ['published', 'pending'])->latest()->get();
-        $pendingAgencies = Agency::where('status', 'pending')->latest()->get();
 
-        // 🆕 جلب المستخدمين المنتظرين لتوثيق الهوية (is_verified = 3)
-        $pendingUsers = User::where('is_verified', 3)->latest()->get();
+        // الوكالات المعلقة مع عدد رحلاتها (لعرضها كاملة في نافذة المراجعة)
+        $pendingAgencies = Agency::withCount('trips')->where('status', 'pending')->latest()->get();
+
+        // المستخدمون المنتظرون لتوثيق الهوية (is_verified = 3) مع المرافقين وعدد الحجوزات
+        $pendingUsers = User::with('companions')
+            ->withCount('bookings')
+            ->where('is_verified', 3)
+            ->latest()
+            ->get();
+
+        // 3. صندوق إشعارات النظام
+        $systemNotifications = $this->buildSystemNotifications(
+            $pendingTrips,
+            $pendingAgencies,
+            $pendingUsers,
+            $seatLogs
+        );
 
         // تمرير كافة البيانات المتغيرة إلى صفحة الـ Blade
         return view('admin.dashboard', compact(
@@ -48,8 +68,139 @@ class AdminController extends Controller
             'pendingTrips',
             'pendingAgencies',
             'pendingUsers',
-            'seatLogs'
+            'seatLogs',
+            'systemNotifications'
         ));
+    }
+
+    /**
+     * تجميع إشعارات النظام الظاهرة في لوحة الإشراف.
+     * level: action (يتطلب إجراء) | warning (تنبيه) | info (معلومة)
+     * kind : agency | user | trip | null  (لتحديد وجهة زر "مراجعة")
+     */
+    private function buildSystemNotifications($pendingTrips, $pendingAgencies, $pendingUsers, $seatLogs)
+    {
+        $items = collect();
+
+        // وكالات جديدة بانتظار التفعيل
+        foreach ($pendingAgencies->take(5) as $agency) {
+            $items->push([
+                'key'     => 'agency-' . $agency->id,
+                'kind'    => 'agency',
+                'ref'     => $agency->id,
+                'level'   => 'action',
+                'icon'    => '🏢',
+                'title'   => 'طلب انضمام وكالة جديدة',
+                'message' => "الوكالة ({$agency->name}) بانتظار مراجعة بياناتها وتفعيلها.",
+                'time'    => $agency->created_at,
+            ]);
+        }
+
+        // طلبات توثيق الهوية
+        foreach ($pendingUsers->take(5) as $user) {
+            $items->push([
+                'key'     => 'user-' . $user->id,
+                'kind'    => 'user',
+                'ref'     => $user->id,
+                'level'   => 'action',
+                'icon'    => '🪪',
+                'title'   => 'طلب توثيق هوية',
+                'message' => "المسافر ({$user->name}) أرسل بياناته للتوثيق.",
+                'time'    => $user->created_at,
+            ]);
+        }
+
+        // رحلات بانتظار الاعتماد
+        foreach ($pendingTrips->take(5) as $trip) {
+            $items->push([
+                'key'     => 'trip-' . $trip->id,
+                'kind'    => 'trip',
+                'ref'     => $trip->id,
+                'level'   => 'action',
+                'icon'    => '🚌',
+                'title'   => 'رحلة بانتظار الاعتماد',
+                'message' => "({$trip->title}) من وكالة " . ($trip->agency->name ?? 'غير معروفة') . '.',
+                'time'    => $trip->created_at,
+            ]);
+        }
+
+        // طلبات تحديث سجل تجاري معلقة
+        $crPending = Agency::where('cr_status', 'pending')->where('status', '!=', 'pending')->latest('updated_at')->take(5)->get();
+        foreach ($crPending as $agency) {
+            $items->push([
+                'key'     => 'cr-pending-' . $agency->id,
+                'kind'    => null,
+                'ref'     => $agency->id,
+                'level'   => 'warning',
+                'icon'    => '📄',
+                'title'   => 'طلب تحديث سجل تجاري',
+                'message' => "الوكالة ({$agency->name}) رفعت سجلاً تجارياً جديداً بانتظار الاعتماد، راجعه من صفحة الوكالات.",
+                'time'    => $agency->updated_at,
+            ]);
+        }
+
+        // سجلات تجارية منتهية أو قاربت على الانتهاء (خلال 30 يوماً)
+        $expiring = Agency::where('status', 'active')
+            ->whereNotNull('cr_expiry_date')
+            ->whereDate('cr_expiry_date', '<=', now()->addDays(30))
+            ->orderBy('cr_expiry_date')
+            ->take(5)
+            ->get();
+
+        foreach ($expiring as $agency) {
+            $expiry = Carbon::parse($agency->cr_expiry_date)->startOfDay();
+            $days = (int) now()->startOfDay()->diffInDays($expiry, false);
+
+            $message = $days < 0
+                ? "السجل التجاري للوكالة ({$agency->name}) منتهي منذ " . abs($days) . ' يوم.'
+                : "السجل التجاري للوكالة ({$agency->name}) ينتهي خلال {$days} يوم.";
+
+            $items->push([
+                'key'     => 'cr-expiry-' . $agency->id,
+                'kind'    => null,
+                'ref'     => $agency->id,
+                'level'   => 'warning',
+                'icon'    => $days < 0 ? '⛔' : '⏳',
+                'title'   => $days < 0 ? 'سجل تجاري منتهي' : 'سجل تجاري قارب على الانتهاء',
+                'message' => $message,
+                'time'    => null,
+            ]);
+        }
+
+        // آخر عمليات إزاحة المقاعد
+        foreach ($seatLogs->take(3) as $log) {
+            $items->push([
+                'key'     => 'seatlog-' . $log->id,
+                'kind'    => null,
+                'ref'     => $log->id,
+                'level'   => 'info',
+                'icon'    => '🔄',
+                'title'   => 'إزاحة مقعد تلقائية',
+                'message' => "نقل ({$log->passenger_name}) من المقعد {$log->old_seat} إلى {$log->new_seat}"
+                    . ($log->reason ? ' — ' . Str::limit($log->reason, 70) : ''),
+                'time'    => $log->created_at,
+            ]);
+        }
+
+        // حجوزات اليوم
+        $todayBookings = Booking::whereDate('created_at', today())->count();
+        if ($todayBookings > 0) {
+            $items->push([
+                'key'     => 'bookings-today',
+                'kind'    => null,
+                'ref'     => null,
+                'level'   => 'info',
+                'icon'    => '🎟️',
+                'title'   => 'حركة الحجوزات اليوم',
+                'message' => "تم تسجيل {$todayBookings} حجز جديد منذ بداية اليوم.",
+                'time'    => null,
+            ]);
+        }
+
+        return $items
+            ->sortByDesc(fn($item) => ($item['time'] ?? now())->timestamp)
+            ->values()
+            ->take(20);
     }
 
 
@@ -224,6 +375,7 @@ class AdminController extends Controller
     }
     /**
      * الحصول على رابط صورة الغلاف بشكل جاهز ومباشر
+     * (ملاحظة: مكان هذه الدالة الصحيح داخل موديل Trip وليس الكنترولر)
      */
     public function getCoverImageUrlAttribute()
     {
@@ -299,7 +451,7 @@ class AdminController extends Controller
             'amount_changed' => 0,
             'seats_changed'  => 0,
             'description'    => "تم حذف الرحلة ({$trip->title}) بواسطة الأدمن وتنظيف السجلات المرتبطة بها.",
-            'operator_name'  => auth()->user()->name ?? $this->getOperatorName(),
+            'operator_name'  => Auth::guard('admin')->user()->name ?? 'الأدمن',
         ]);
 
         // حذف الحجوزات التابعة ثم حذف الرحلة نهائياً
@@ -314,7 +466,9 @@ class AdminController extends Controller
         $user = User::findOrFail($id);
         $user->update(['is_verified' => 2]);
 
-        return redirect()->back()->with('success', 'تم رفض اعتماد الهوية!');
+        return redirect()->back()
+            ->with('active_tab', 'users')
+            ->with('success', 'تم رفض اعتماد الهوية!');
     }
 
     public function identityRequests(Request $request)
@@ -355,7 +509,9 @@ class AdminController extends Controller
         $user = User::findOrFail($id);
         $user->update(['is_verified' => 1]);
 
-        return redirect()->back()->with('success', 'تم اعتماد وتوثيق هوية المسافر بنجاح! 🛂');
+        return redirect()->back()
+            ->with('active_tab', 'users')
+            ->with('success', 'تم اعتماد وتوثيق هوية المسافر بنجاح! 🛂');
     }
 
     public function rejectTrip($id)
@@ -383,7 +539,9 @@ class AdminController extends Controller
         $agency = Agency::findOrFail($id);
         $agency->update(['status' => 'active']);
 
-        return redirect()->back()->with('success', "تم اعتماد وتفعيل حساب ({$agency->name}) بنجاح! 🎉");
+        return redirect()->back()
+            ->with('active_tab', 'agencies')
+            ->with('success', "تم اعتماد وتفعيل حساب ({$agency->name}) بنجاح! 🎉");
     }
 
     public function blockAgency($id)
