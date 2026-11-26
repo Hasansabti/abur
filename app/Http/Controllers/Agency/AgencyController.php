@@ -233,26 +233,15 @@ class AgencyController extends Controller
     public function logout(Request $request)
     {
         if (auth('agency')->check()) {
-            auth()->guard('agency')->logout();
+            auth('agency')->logout();
         } elseif (auth('employee')->check()) {
-            auth()->guard('employee')->logout();
+            auth('employee')->logout();
         }
-
-        session()->forget([
-            'agency_logged_in',
-            'agency_id',
-            'agency_name',
-            'employee_logged_in',
-            'employee_id',
-            'employee_name',
-            'employee_role',
-            'user_type'
-        ]);
 
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return redirect()->route('agency.login');
+        return redirect('/agency/login');
     }
 
     public function sendResetLinkEmail(Request $request)
@@ -454,55 +443,55 @@ class AgencyController extends Controller
     }
 
     public function storeExtraCharge(Request $request, Booking $booking)
-{
-    $agencyId = $this->getAgencyId();
-    $tripAgencyId = $booking->trip?->agency_id ?? $booking->trip()->withoutGlobalScopes()->value('agency_id');
+    {
+        $agencyId = $this->getAgencyId();
+        $tripAgencyId = $booking->trip?->agency_id ?? $booking->trip()->withoutGlobalScopes()->value('agency_id');
 
-    abort_unless($agencyId && $tripAgencyId == $agencyId, 403);
+        abort_unless($agencyId && $tripAgencyId == $agencyId, 403);
 
-    if ($booking->payment_status !== 'paid' || in_array($booking->status, ['cancelled', 'requestC'])) {
-        return back()->with('error', 'لا يمكن إنشاء فاتورة إضافية لهذا الحجز.');
-    }
-
-    $data = $request->validate([
-        'amount'      => 'required|numeric|min:1',
-        'description' => 'required|string|max:255',
-    ]);
-
-    // الدفع يتم في صفحة الدفع الموحدة عندنا، فما نحتاج فاتورة من ميسر
-    $charge = BookingExtraCharge::create([
-        'booking_id'  => $booking->id,
-        'agency_id'   => $agencyId,
-        'amount'      => $data['amount'],
-        'description' => $data['description'],
-        'token'       => Str::random(40),
-        'status'      => 'pending',
-        'created_by' => $this->getOperatorName(),
-    ]);
-
-    if ($booking->agency_note_status === 'pending') {
-        $booking->update(['agency_note_status' => 'answered']);
-    }
-
-    $emailSent = false;
-    $email = $booking->customer_email;
-
-    if (!empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL) && $email !== 'agency-guest@abur.com') {
-        try {
-            Mail::to($email)->send(new \App\Mail\ExtraChargeMail($booking, $charge));
-            $emailSent = true;
-        } catch (\Throwable $e) {
-            Log::error("فشل إرسال إيميل الفاتورة الإضافية للحجز #{$booking->id}: " . $e->getMessage());
+        if ($booking->payment_status !== 'paid' || in_array($booking->status, ['cancelled', 'requestC'])) {
+            return back()->with('error', 'لا يمكن إنشاء فاتورة إضافية لهذا الحجز.');
         }
-    }
 
-    return back()->with(
-        'success',
-        $emailSent
-            ? 'تم إنشاء رابط الدفع وإرساله للمسافر بالإيميل.'
-            : 'تم إنشاء رابط الدفع، لكن تعذر إرساله بالإيميل. سيظهر للمسافر في صفحة حسابه.'
-    );
-}
+        $data = $request->validate([
+            'amount'      => 'required|numeric|min:1',
+            'description' => 'required|string|max:255',
+        ]);
+
+        // الدفع يتم في صفحة الدفع الموحدة عندنا، فما نحتاج فاتورة من ميسر
+        $charge = BookingExtraCharge::create([
+            'booking_id'  => $booking->id,
+            'agency_id'   => $agencyId,
+            'amount'      => $data['amount'],
+            'description' => $data['description'],
+            'token'       => Str::random(40),
+            'status'      => 'pending',
+            'created_by' => $this->getOperatorName(),
+        ]);
+
+        if ($booking->agency_note_status === 'pending') {
+            $booking->update(['agency_note_status' => 'answered']);
+        }
+
+        $emailSent = false;
+        $email = $booking->customer_email;
+
+        if (!empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL) && $email !== 'agency-guest@abur.com') {
+            try {
+                Mail::to($email)->send(new \App\Mail\ExtraChargeMail($booking, $charge));
+                $emailSent = true;
+            } catch (\Throwable $e) {
+                Log::error("فشل إرسال إيميل الفاتورة الإضافية للحجز #{$booking->id}: " . $e->getMessage());
+            }
+        }
+
+        return back()->with(
+            'success',
+            $emailSent
+                ? 'تم إنشاء رابط الدفع وإرساله للمسافر بالإيميل.'
+                : 'تم إنشاء رابط الدفع، لكن تعذر إرساله بالإيميل. سيظهر للمسافر في صفحة حسابه.'
+        );
+    }
 
     public function cancelExtraCharge(BookingExtraCharge $charge)
     {
@@ -1997,7 +1986,7 @@ class AgencyController extends Controller
         // ================= 3. جلب السائقين والمركبات والكادر =================
         $drivers  = Driver::where('agency_id', $agencyId)->get();
         $vehicles = Vehicle::where('agency_id', $agencyId)->get();
-        // جلب الكادر التابع للوكالة 
+        // جلب الكادر التابع للوكالة
         $staffMembers = Staff::where('agency_id', $agencyId)->get();
         // ================= 4. تجميع الإحصائيات الشاملة =================
         $stats = (object)[
