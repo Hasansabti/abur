@@ -799,7 +799,7 @@
             {{-- ═════════════ (و) السكن والأسعار ═════════════ --}}
             <section class="card">
                 <h2 class="card-title"><span class="card-icon bg-emerald-100 text-emerald-600">🏨</span> توزيع السكن
-                    والأسعار التفصيلية للغرف وباقات الوجبات الديناميكية</h2>
+                    والأسعار التفصيلية للغرف وباقات الوجبات</h2>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     @foreach ($roomTypes as $key => $label)
