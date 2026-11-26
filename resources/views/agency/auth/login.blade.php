@@ -220,7 +220,7 @@
                     ليس لديك حساب وكالة؟
                     <a href="{{ route('agency.auth.register') }}"
                         class="text-indigo-600 hover:text-indigo-700 font-bold transition-all mr-1">
-                        سجل وكالتك الآن
+                         وكالتك الآن
                     </a>
                 </p>
             </div>
