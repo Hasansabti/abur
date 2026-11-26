@@ -1,1743 +1,2122 @@
-@extends('layouts.agency')
+<?php
 
-@section('content')
+namespace App\Http\Controllers\Agency;
 
-    {{-- ╔══════════════════════════════════════════════════════════════╗
-         ║  1) تجهيز البيانات                                            ║
-         ╚══════════════════════════════════════════════════════════════╝ --}}
-    @php
-        // ----- دوال مساعدة -----
-        // قيمة منطقية تحترم old() بعد فشل التحقق، وإلا تستخدم القيمة المحفوظة
-        $bool = fn($key, $default = false) => session()->hasOldInput()
-            ? filter_var(old($key), FILTER_VALIDATE_BOOLEAN)
-            : (bool) $default;
-        $dt = fn($v) => $v ? date('Y-m-d\TH:i', strtotime($v)) : '';
-        $arr = fn($v) => is_array($v) ? $v : (json_decode($v ?? '[]', true) ?: []);
+// Controllers
+use App\Http\Controllers\Controller;
 
-        // ----- العميل / الطلب الخاص -----
-        $selectedUserId = old('user_id', $trip->user_id ?? request('user_id'));
-        $selectedRequestId = old(
-            'private_trip_request_id',
-            $trip->private_trip_request_id ?? request('private_request_id'),
-        );
-        $targetUser = $user ?? ($trip->user ?? ($selectedUserId ? \App\Models\User::find($selectedUserId) : null));
-        $hasCustomer = $targetUser || $selectedUserId;
+// Models
+use App\Models\Agency;
+use App\Models\Booking;
+use App\Models\Vehicle;
+use App\Models\BookingSeat;
+use App\Models\Driver;
+use App\Models\Trip;
+use App\Models\AuditLog;
+use App\Models\TripRoom;
+use App\Models\Staff;
+use App\Models\AgencyBankAccount;
+use App\Models\AgencyRating;
+use App\Models\AgencyEmployee;
 
-        // ----- صورة الغلاف -----
-        $coverImageUrl = !empty($trip->cover_image)
-            ? (str_starts_with($trip->cover_image, 'http')
-                ? $trip->cover_image
-                : asset('storage/' . $trip->cover_image))
-            : '';
+use App\Models\BookingExtraCharge;
+use App\Models\AgencyTransaction;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
 
-        // ----- المدن -----
-        $allSaudiCities = [
-            'الرياض',
-            'مكة المكرمة',
-            'المدينة المنورة',
-            'جدة',
-            'الدمام',
-            'الخبر',
-            'الظهران',
-            'الهفوف',
-            'الأحساء',
-            'الطائف',
-            'تبوك',
-            'بريدة',
-            'عنيزة',
-            'حائل',
-            'أبها',
-            'خميس مشيط',
-            'جازان',
-            'نجران',
-            'الباحة',
-            'سكاكا',
-            'عرعر',
-            'الجبيل',
-            'القطيف',
-            'ينبع',
-            'الخرج',
-            'حفر الباطن',
-            'القريات',
-            'بيشة',
-            'المجمعة',
-            'الدوادمي',
-            'شرورة',
-            'رابغ',
-            'طريف',
-            'القنفذة',
-            'الليث',
-            'وادي الدواسر',
-            'الزلفي',
-            'شقراء',
-            'بقيق',
-            'رأس تنورة',
-            'النعيرية',
-            'الخفجي',
-            'العلا',
-            'أملج',
-            'الوجه',
-            'ضباء',
-            'طبرجل',
-            'تيماء',
-            'دومة الجندل',
-            'بلجرشي',
-            'النماص',
-            'محايل عسير',
-            'صبيا',
-            'أبو عريش',
-            'صامطة',
-            'أحد رفيدة',
-            'السليل',
-            'عفيف',
-            'القويعية',
-            'الغاط',
-            'ثادق',
-            'حوطة بني تميم',
-            'الأفلاج',
-            'رنية',
-            'تربة',
-        ];
-        $cityFields = [['from_city', 'من (المدينة)', 'اختر المدينة...'], ['to_city', 'إلى (الوجهة)', 'اختر الوجهة...']];
+// Facades & Utilities
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
+use SimpleSoftwareIO\QrCode\Facades\QrCode;
+use Carbon\Carbon;
 
-        // ----- خيارات النظام / النقل / المسار: [name, model, label, accent, [[value, icon, text]...]] -----
-        $choiceGroups = [
-            [
-                'trip_type',
-                'tripType',
-                'نظام الرحلة',
-                'blue',
-                [['one_way', '↗️', 'ذهاب فقط'], ['round_trip', '🔄', 'ذهاب وعودة']],
-            ],
-            ['transport_type', 'transport', 'وسيلة النقل', 'indigo', [['bus', '🚌', 'بري'], ['flight', '✈️', 'طيران']]],
-            [
-                'route_type',
-                'routeType',
-                'نوع المسار',
-                'purple',
-                [['domestic', '🇸🇦', 'داخلية'], ['international', '🌍', 'خارجية']],
-            ],
-        ];
+class AgencyController extends Controller
+{
+    /**
+     * جلب معرف الوكالة الحالي (من الجلسة أو الجارد المفعّل)
+     */
+    private function getAgencyId()
+    {
+        if (auth('agency')->check()) {
+            return auth('agency')->id();
+        }
 
-        // ----- المميزات -----
-        $predefinedFeatures = [
-            'iraq_sheikh' => 'يرافقك شيخ',
-            'coaching' => 'يوجد كوادر بالرحلة',
-            'meals' => 'شاملة الوجبات',
-            'wifi' => 'إنترنت مجاني',
-            'holy_places' => 'زيارة المشاعر',
-            'close_to_haram' => 'قريب من الحرم',
-        ];
-        $currentFeatures = (array) old('features', $arr($trip->features ?? null));
-        $customFeatures = array_values(array_diff($currentFeatures, $predefinedFeatures));
+        if (auth('employee')->check()) {
+            return auth('employee')->user()->agency_id;
+        }
 
-        // ----- الخدمات الإضافية -----
-        $currentExtraServices = array_values((array) old('extra_services', $arr($trip->extra_services ?? null)));
+        if (session()->has('agency_id')) {
+            return session('agency_id');
+        }
 
-        // ----- الوجبات: [modelKey, activeName, priceName, icon, label, placeholder] -----
-        $meals = [
-            ['hasBreakfast', 'bf_price_active', 'breakfast_price', '🍳', 'وجبة فطور', 'سعر الفطور المفرد'],
-            ['hasLunch', 'ln_price_active', 'lunch_price', '🍗', 'وجبة غداء', 'سعر الغداء المفرد'],
-            ['hasDinner', 'dn_price_active', 'dinner_price', '🍔', 'وجبة عشاء', 'سعر العشاء المفرد'],
-        ];
-        // [name, label, شرط الظهور, باقة كاملة؟]
-        $bundles = [
-            ['price_bf_ln', '🛍️ سعر باقة (فطور + غداء) للراكب', 'hasBreakfast && hasLunch', false],
-            ['price_ln_dn', '🛍️ سعر باقة (غداء + عشاء) للراكب', 'hasLunch && hasDinner', false],
-            ['price_bf_dn', '🛍️ سعر باقة (فطور + عشاء) للراكب', 'hasBreakfast && hasDinner', false],
-            [
-                'price_all_meals',
-                '🎁 سعر الباقة الكاملة (فطور + غداء + عشاء)',
-                'hasBreakfast && hasLunch && hasDinner',
-                true,
-            ],
-        ];
+        return null;
+    }
 
-        // ----- الغرف -----
-        $roomTypes = ['single' => 'فردية', 'double' => 'ثنائية', 'triple' => 'ثلاثية', 'quad' => 'رباعية'];
-        $roomOptions = is_string($trip->room_options ?? null)
-            ? (json_decode($trip->room_options, true) ?:
-            [])
-            : $trip->room_options ?? [];
-        // ----- الباص الثاني -----
-        $overflowTrip = !empty($trip->id) ? $trip->overflowTrip : null;
-        $overflowActive = $overflowTrip && !$overflowTrip->is_overflow_standby;
-        $overflowHasBookings = $overflowTrip
-            ? \App\Models\BookingSeat::where('trip_id', $overflowTrip->id)->exists()
-            : false;
+    private function getOperatorName(): string
+    {
+        if (auth('employee')->check()) {
+            return auth('employee')->user()->name . ' (موظف)';
+        }
 
-        // ----- المفاتيح داخل قسم السكن: [name, model, icon, tone, title, desc] -----
-        $toggles = [
-            [
-                'allows_shared_rooms', // ✅ اسم الحقل (كان هنا نص الوصف بالغلط فما كان يُرسل للسيرفر)
-                'sharedRooms',
-                '👥',
-                'bg-indigo-50 text-indigo-600',
-                'الغرف المشتركة',
-                'تفعيل هذا الخيار يسمح للعملاء بحجز أسِرّة منفردة داخل غرفة مشتركة. حدد أنواع الغرف المتاحة للمشاركة من بطاقات الغرف أعلاه.',
-            ],
-            [
-                'allow_to_add_seat',
-                'extraSeat',
-                '💺',
-                'bg-indigo-50 text-indigo-600',
-                'مقاعد إضافية',
-                'هذا الخيار يسمح للعميل بحجز مقعد إضافي.',
-            ],
-            [
-                'is_security_approved',
-                'autoSeating',
-                '🔀',
-                'bg-indigo-50 text-indigo-600',
-                'ترتيب المقاعد',
-                'إعادة توزيع المقاعد ديناميكياً لصالح الفئة الأعلى طلباً عند بلوغ إشغالها 80% (تفعيل الزر يوقف التوزيع التلقائي للمقاعد).',
-            ],
-            [
-                'allow_accommodation_only',
-                'accomOnly',
-                '🏢',
-                'bg-emerald-50 text-emerald-600',
-                'السماح بحجز السكن فقط',
-                'تفعيل هذا الخيار يتيح للمسافرين حجز الغرف الفندقية بدون خدمات النقل والذهاب.',
-            ],
-        ];
+        if (auth('agency')->check()) {
+            return auth('agency')->user()->name . ' (مالك الوكالة)';
+        }
 
-        // ----- الحسابات البنكية -----
-        $savedAccounts = [];
-        if (old('bank_names')) {
-            foreach (old('bank_names') as $i => $bankName) {
-                $savedAccounts[] = [
-                    'bank_name' => $bankName,
-                    'iban' => old("iban_numbers.$i"),
-                    'account_number' => old("account_number.$i"),
-                    'qr_code' => old("old_bank_images.$i"),
-                ];
+        if (session()->has('employee_name')) {
+            return session('employee_name') . ' (موظف)';
+        }
+
+        if (session()->has('agency_name')) {
+            return session('agency_name');
+        }
+
+        return 'نظام الوكالة الآلي';
+    }
+
+    // =========================================================================
+    // 1. AUTHENTICATION & DASHBOARD (إدارة الحسابات ولوحة التحكم)
+    // =========================================================================
+
+    public function register(Request $request)
+    {
+        $request->validate([
+            'name'           => ['required', 'string', 'max:255'],
+            'commercial_name' => ['required', 'string', 'max:200'],
+            'email'          => ['required', 'email', 'max:255', 'unique:agencies,email'],
+            'iconA'          => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+            'phone'          => ['required', 'regex:/^(05|01|9200|800)\d{7,8}$|^(?:\+966|00966)5\d{8}$/'],
+            'password'       => ['required', 'confirmed', 'min:8'],
+            'ibanA'          => ['required'],
+            'commercial_id'  => ['required', 'string', 'max:50'],
+            'cr_expiry_date' => ['required', 'date', 'after:today'],
+            'status'         => ['nullable', 'string', 'max:50'],
+        ]);
+
+        $iconAPath = null;
+        if ($request->hasFile('iconA')) {
+            $iconAPath = $request->file('iconA')->store('uploads/iconA', 'public');
+        }
+
+        $agency = Agency::create([
+            'name'           => $request->name,
+            'commercial_name' => $request->commercial_name,
+            'email'          => $request->email,
+            'iconA'          => $iconAPath,
+            'phone'          => $request->phone,
+            'password'       => Hash::make($request->password),
+            'ibanA'          => $request->ibanA,
+            'commercial_id'  => $request->commercial_id,
+            'cr_expiry_date' => $request->cr_expiry_date,
+            'status'         => 'pending',
+        ]);
+
+        auth()->guard('agency')->login($agency);
+
+        session([
+            'agency_logged_in' => true,
+            'agency_id'        => $agency->id,
+            'agency_name'      => $agency->name
+        ]);
+
+        $request->session()->regenerate();
+
+        return redirect()->route('agency.dashboard');
+    }
+    public function create(Request $request)
+    {
+        if ($request->expectsJson()) {
+            return response()->json(['success' => false, 'message' => 'يرجى استخدام بروتوكول POST لإنشاء الحساب الجديد.'], 405);
+        }
+        return view('agency.auth.register');
+    }
+
+
+    public function showLoginForm(Request $request)
+    {
+        if ($request->expectsJson()) {
+            return response()->json(['success' => false, 'message' => 'يرجى استخدام بروتوكول POST لتسجيل الدخول.'], 405);
+        }
+        return view('agency.auth.login');
+    }
+
+    public function authenticate(Request $request)
+    {
+        $credentials = $request->validate([
+            'email'    => ['required', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        $throttleKey = Str::transliterate(Str::lower($request->input('email')) . '|' . $request->ip());
+
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return back()->withErrors([
+                'email' => "تجاوزت عدد محاولات الدخول المسموح بها. يرجى الانتظار {$seconds} ثانية قبل المحاولة مجدداً.",
+            ])->onlyInput('email');
+        }
+
+        $agency = Agency::where('email', $credentials['email'])->first();
+
+        if ($agency && Hash::check($credentials['password'], $agency->password)) {
+
+            if ($agency->status !== 'active') {
+                return back()->withErrors([
+                    'email' => 'عذراً، حساب الوكالة هذا قيد المراجعة حالياً أو تم تجميده من قبل الإدارة.',
+                ])->onlyInput('email');
             }
-        } else {
-            $savedAccounts = $arr($trip->bank_accounts ?? null);
-            if (empty($savedAccounts) && isset($bankAccounts) && $bankAccounts->count() > 0) {
-                foreach ($bankAccounts as $account) {
-                    $savedAccounts[] = [
-                        'bank_name' => $account->bank_name,
-                        'iban' => $account->iban,
-                        'account_number' => $account->account_number,
-                        'qr_code' => $account->qr_code ?? '',
-                    ];
+
+            RateLimiter::clear($throttleKey);
+            auth()->guard('agency')->login($agency, $request->has('remember'));
+
+            session([
+                'agency_logged_in' => true,
+                'agency_id'        => $agency->id,
+                'agency_name'      => $agency->name,
+                'user_type'        => 'owner',
+            ]);
+
+            $request->session()->regenerate();
+
+            return redirect()->route('agency.dashboard');
+        }
+
+        $employee = AgencyEmployee::with('agency')->where('email', $credentials['email'])->first();
+
+        if ($employee && Hash::check($credentials['password'], $employee->password)) {
+
+            if (!$employee->is_active) {
+                return back()->withErrors([
+                    'email' => 'عذراً، حساب الموظف هذا معطل حالياً من قبل إدارة الوكالة.',
+                ])->onlyInput('email');
+            }
+
+            if (!$employee->agency || $employee->agency->status !== 'active') {
+                return back()->withErrors([
+                    'email' => 'عذراً، حساب الوكالة التابع لها قيد المراجعة أو معطل حالياً.',
+                ])->onlyInput('email');
+            }
+
+            RateLimiter::clear($throttleKey);
+            auth()->guard('employee')->login($employee, $request->has('remember'));
+
+            session([
+                'employee_logged_in' => true,
+                'employee_id'        => $employee->id,
+                'employee_name'      => $employee->name,
+                'employee_role'      => $employee->role,
+                'agency_id'          => $employee->agency_id,
+                'agency_name'        => $employee->agency->name,
+                'user_type'          => 'employee',
+            ]);
+
+            $request->session()->regenerate();
+
+            return redirect()->route('agency.dashboard');
+        }
+
+        RateLimiter::hit($throttleKey, 60);
+
+        return back()->withErrors([
+            'email' => 'بيانات الدخول غير صحيحة.',
+        ])->onlyInput('email');
+    }
+
+
+
+    public function logout(Request $request)
+    {
+        if (auth('agency')->check()) {
+            auth('agency')->logout();
+        } elseif (auth('employee')->check()) {
+            auth('employee')->logout();
+        }
+
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+
+        return redirect('/agency/login');
+    }
+
+    public function sendResetLinkEmail(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+
+        // لإعادة تعيين كلمة المرور
+        $throttleKey = 'password-reset|' . $request->ip();
+        if (RateLimiter::tooManyAttempts($throttleKey, 3)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return redirect()->back()->withErrors(['email' => "يرجى الانتظار {$seconds} ثانية قبل إعادة طلب رابط إعادة التعيين."]);
+        }
+        RateLimiter::hit($throttleKey, 60);
+
+        $status = Password::broker('agencies')->sendResetLink(
+            $request->only('email')
+        );
+
+        if ($status === Password::RESET_LINK_SENT) {
+            return redirect()->back()->with('status', __($status));
+        }
+
+        return redirect()->back()->withErrors(['email' => __($status)]);
+    }
+
+    public function agencyDashboard()
+    {
+        $agencyId = $this->getAgencyId();
+        if (!$agencyId) {
+            return redirect()->route('client.auth.login')->with('error', 'يرجى تسجيل الدخول أولاً.');
+        }
+
+        $agency = Agency::findOrFail($agencyId);
+
+        // 🟢 حساب الأرصدة والأرباح للوكالة
+        $availableBalance = $agency->available_balance ?? 0;
+        $pendingBalance   = $agency->pending_balance ?? 0;
+
+        $totalApprovedPayouts = $agency->payoutRequests()
+            ->whereIn('status', ['approved', 'completed'])
+            ->sum('requested_amount');
+
+        // إجمالي الأرباح الصافية التاريخية
+        $totalEarnings = $totalApprovedPayouts;
+
+        // جلب جميع رحلات الوكالة (مع إضافة حقل vehicle_model للاستفادة منه في الحسابات)
+        $trips = Trip::where('agency_id', $agencyId)
+            ->select('id', 'title', 'from_city', 'to_city', 'transport_type', 'status', 'price', 'total_seats', 'available_seats', 'departure_at', 'vehicle_model')
+            ->latest()
+            ->get();
+
+        // جلب القوائم المساعدة
+        $drivers  = Driver::where('agency_id', $agencyId)->latest()->get();
+        $vehicles = Vehicle::where('agency_id', $agencyId)->latest()->get();
+        $banks    = AgencyBankAccount::where('agency_id', $agencyId)->latest()->get();
+
+        // ⚡ تحسين الأداء: حساب الإحصائيات مباشرة من الذاكرة (Collection) لتقليل الاستعلامات على قاعدة البيانات
+        $busesCount = $trips->pluck('vehicle_model')->filter()->unique()->count();
+
+        $activeTripsCount = $trips->filter(function ($trip) {
+            return in_array(trim($trip->status), ['active', 'on_way', 'نشطة']);
+        })->count();
+
+        $totalAvailableSeats = $trips->where('status', '!=', 'completed')->sum('available_seats');
+
+        return view('agency.dashboard', compact(
+            'trips',
+            'drivers',
+            'vehicles',
+            'banks',
+            'busesCount',
+            'activeTripsCount',
+            'totalAvailableSeats',
+            'agency',
+            'totalEarnings',
+            'availableBalance',
+            'pendingBalance'
+        ));
+    }
+    /**
+     * تحديث إعدادات الوكالة وتقديم طلب تحديث السجل التجاري
+     */
+    public function updateSettings(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+
+        if (!$agencyId) {
+            return redirect()->back()->with('error', 'تعذر العثور على حساب الوكالة الخاص بك.');
+        }
+
+        $agency = Agency::findOrFail($agencyId);
+
+        $validated = $request->validate([
+            'name'            => 'required|string|max:255',
+            'commercial_name' => 'nullable|string|max:255',
+            'email'           => 'required|email|max:255|unique:agencies,email,' . $agency->id,
+            'phone'           => 'nullable|string|max:20',
+            'commercial_id'   => 'required|string|max:50',
+            'cr_expiry_date'  => 'required|date',
+            'cr_document'     => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+        ]);
+
+        $dataToUpdate = [
+            // البيانات العادية تتحدث فوراً
+            'name'            => $validated['name'],
+            'commercial_name' => $validated['commercial_name'],
+            'email'           => $validated['email'],
+            'phone'           => $validated['phone'],
+        ];
+
+        // التحقق هل تم إدخال رقم سجل جديد أو تاريخ جديد أو إرفاق ملف جديد
+        $hasCrChanges = $validated['commercial_id'] !== $agency->commercial_id
+            || $validated['cr_expiry_date'] !== $agency->cr_expiry_date
+            || $request->hasFile('cr_document');
+
+        if ($hasCrChanges) {
+            if ($request->hasFile('cr_document')) {
+                // حذف أي ملف سابق كان معلقاً ولم يُعتمد بعد
+                if ($agency->pending_cr_document_path) {
+                    Storage::disk('public')->delete($agency->pending_cr_document_path);
+                }
+                $dataToUpdate['pending_cr_document_path'] = $request->file('cr_document')->store('agency_documents/pending', 'public');
+            } else {
+                $dataToUpdate['pending_cr_document_path'] = $agency->pending_cr_document_path ?? $agency->cr_document_path;
+            }
+
+            // حفظ بيانات السجل في حقول "قيد المراجعة"
+            $dataToUpdate['pending_commercial_id']  = $validated['commercial_id'];
+            $dataToUpdate['pending_cr_expiry_date'] = $validated['cr_expiry_date'];
+            $dataToUpdate['cr_status']              = 'pending';
+        }
+
+        $agency->update($dataToUpdate);
+
+        $message = $hasCrChanges
+            ? 'تم حفظ البيانات الأساسية، وإرسال طلب تحديث السجل التجاري للإدارة للمراجعة والاعتماد.'
+            : 'تم تحديث بيانات الوكالة بنجاح.';
+
+        return redirect()->back()->with('success', $message);
+    }
+
+    // =========================================================================
+    // 2. BOOKING MANAGEMENT (إدارة الحجوزات والتذاكر للوكالة)
+    // =========================================================================
+
+    public function indexBooking(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+        $trips = Trip::where('agency_id', $agencyId)->latest()->get();
+
+        $bookingsQuery = Booking::query()
+            ->whereHas('trip', function ($query) use ($agencyId) {
+                $query->where('agency_id', $agencyId);
+            })
+            ->with(['trip', 'bookingSeats.room', 'extraCharges', 'invoices', 'user', 'customServices']);
+
+        $search = trim($request->input('x_search', $request->input('search')));
+
+        if (!empty($search)) {
+            $bookingsQuery->where(function ($q) use ($search) {
+                $q->where('id', 'LIKE', "%{$search}%")
+                    ->orWhere('customer_name', 'LIKE', "%{$search}%")
+                    ->orWhere('customer_phone', 'LIKE', "%{$search}%")
+                    ->orWhereHas('bookingSeats', function ($sq) use ($search) {
+                        $sq->where('passenger_name', 'LIKE', "%{$search}%")
+                            ->orWhere('passenger_national_id', 'LIKE', "%{$search}%");
+
+                        if (is_numeric($search)) {
+                            $sq->orWhereJsonContains('seat_number', (int)$search)
+                                ->orWhereJsonContains('seat_number', (string)$search);
+                        }
+                    });
+            });
+        }
+
+        if ($request->filled('trip_id')) {
+            $bookingsQuery->where('trip_id', $request->input('trip_id'));
+        }
+
+        $confirmedCount = (clone $bookingsQuery)->where('status', 'confirmed')->count();
+        $pendingCount   = (clone $bookingsQuery)->where('status', 'pending')->count();
+
+        $bookings = $bookingsQuery->latest()->paginate(10)->withQueryString();
+
+        // توحيد مصفوفة room_type لجميع المقاعد ليفهمها Alpine.js كـ "shared"
+        $bookings->getCollection()->transform(function ($booking) {
+            $booking->bookingSeats->transform(function ($seat) {
+                if (\Illuminate\Support\Str::contains($seat->room_type, ['مشتركة', 'shared']) || !is_null($seat->trip_room_id)) {
+                    $seat->normalized_room_type = 'shared';
+                } else {
+                    $seat->normalized_room_type = strtolower(trim($seat->room_type));
+                }
+                return $seat;
+            });
+            return $booking;
+        });
+
+        return view("agency.bookings.index", compact('bookings', 'trips', 'confirmedCount', 'pendingCount'));
+    }
+
+    public function storeExtraCharge(Request $request, Booking $booking)
+    {
+        $agencyId = $this->getAgencyId();
+        $tripAgencyId = $booking->trip?->agency_id ?? $booking->trip()->withoutGlobalScopes()->value('agency_id');
+
+        abort_unless($agencyId && $tripAgencyId == $agencyId, 403);
+
+        if ($booking->payment_status !== 'paid' || in_array($booking->status, ['cancelled', 'requestC'])) {
+            return back()->with('error', 'لا يمكن إنشاء فاتورة إضافية لهذا الحجز.');
+        }
+
+        $data = $request->validate([
+            'amount'      => 'required|numeric|min:1',
+            'description' => 'required|string|max:255',
+        ]);
+
+        // الدفع يتم في صفحة الدفع الموحدة عندنا، فما نحتاج فاتورة من ميسر
+        $charge = BookingExtraCharge::create([
+            'booking_id'  => $booking->id,
+            'agency_id'   => $agencyId,
+            'amount'      => $data['amount'],
+            'description' => $data['description'],
+            'token'       => Str::random(40),
+            'status'      => 'pending',
+            'created_by' => $this->getOperatorName(),
+        ]);
+
+        if ($booking->agency_note_status === 'pending') {
+            $booking->update(['agency_note_status' => 'answered']);
+        }
+
+        $emailSent = false;
+        $email = $booking->customer_email;
+
+        if (!empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL) && $email !== 'agency-guest@abur.com') {
+            try {
+                Mail::to($email)->send(new \App\Mail\ExtraChargeMail($booking, $charge));
+                $emailSent = true;
+            } catch (\Throwable $e) {
+                Log::error("فشل إرسال إيميل الفاتورة الإضافية للحجز #{$booking->id}: " . $e->getMessage());
+            }
+        }
+
+        return back()->with(
+            'success',
+            $emailSent
+                ? 'تم إنشاء رابط الدفع وإرساله للمسافر بالإيميل.'
+                : 'تم إنشاء رابط الدفع، لكن تعذر إرساله بالإيميل. سيظهر للمسافر في صفحة حسابه.'
+        );
+    }
+
+    public function cancelExtraCharge(BookingExtraCharge $charge)
+    {
+        abort_unless($charge->agency_id == $this->getAgencyId(), 403);
+        if ($charge->status === 'pending') {
+            $charge->update(['status' => 'cancelled']);
+        }
+        return back()->with('success', 'تم إلغاء طلب الدفع.');
+    }
+
+    public function noteHandled(Booking $booking)
+    {
+        $agencyId = $this->getAgencyId();
+        $tripAgencyId = $booking->trip?->agency_id ?? $booking->trip()->withoutGlobalScopes()->value('agency_id');
+
+        abort_unless($agencyId && $tripAgencyId == $agencyId, 403);
+        $booking->update(['agency_note_status' => 'answered']);
+        return back()->with('success', 'تم إغلاق الملاحظة.');
+    }
+
+    public function dismissNote($id)
+    {
+        $agencyId = $this->getAgencyId();
+
+        Booking::where('id', $id)
+            ->whereHas('trip', fn($q) => $q->where('agency_id', $agencyId))
+            ->firstOrFail()
+            ->update(['agency_note_status' => 'dismissed']);
+
+        return back()->with('success', 'تم إغلاق الملاحظة.');
+    }
+
+    public function updateBooking(Request $request, $id)
+    {
+        $request->validate([
+            'customer_name'                         => 'required|string|max:255',
+            'customer_phone'                        => 'nullable|string|max:20',
+            'status'                                => 'required|in:pending,confirmed,cancelled,completed,requestC',
+            'payment_status'                        => 'required|in:pending,unpaid,paid,paidof,failed,refunded',
+            'cash_paid'                             => 'nullable|numeric|min:0',
+            'seats'                                 => 'nullable|array',
+            'seats.*.room_type'                     => 'required|string',
+            'seats.*.room_package'                  => 'nullable|string',
+            'seats.*.is_room_shared'                => 'nullable|boolean',
+            'seats.*.meal_package'                  => 'nullable|string',
+            'seats.*.bf'                            => 'nullable|boolean',
+            'seats.*.ln'                            => 'nullable|boolean',
+            'seats.*.dn'                            => 'nullable|boolean',
+            'seats.*.extra_services'                => 'nullable|array',
+            'seats.*.extra_services.*.selected'     => 'nullable|boolean',
+            'seats.*.extra_services.*.name'         => 'nullable|string',
+            'seats.*.extra_services.*.price'        => 'nullable|numeric',
+        ]);
+
+        DB::transaction(function () use ($request, $id) {
+            $booking = Booking::with(['trip', 'bookingSeats'])->findOrFail($id);
+
+            $oldTotalAmount   = $booking->total_amount;
+            $oldStatus        = $booking->status;
+            $oldPaymentStatus = $booking->payment_status;
+            $oldCustomerName  = $booking->customer_name;
+
+            $booking->customer_name  = $request->customer_name;
+            $booking->customer_phone = $request->customer_phone;
+            $booking->status         = $request->status;
+            $booking->payment_status = $request->payment_status;
+
+            // حفظ قيمة الخصم إن وجد في الحقل المخصص في الجدول
+            if ($request->has('cash_paid')) {
+                $booking->cash_paid = (float)$request->cash_paid;
+            }
+
+            $trip = $booking->trip;
+            $tripRoomOptions = is_array($trip?->room_options) ? $trip->room_options : json_decode($trip?->room_options ?? '[]', true);
+            $tripMealOptions = is_array($trip?->meal_options) ? $trip->meal_options : json_decode($trip?->meal_options ?? '[]', true);
+
+            $tripRoomOptions = array_filter($tripRoomOptions, function ($opt) {
+                return isset($opt['price']) && (float)$opt['price'] > 0;
+            });
+
+            $mealPackages    = $tripMealOptions['packages'] ?? [];
+            $individualMeals = $tripMealOptions['individual'] ?? [];
+
+            $capacities = [
+                'single'     => 1,
+                'double'     => 2,
+                'triple'     => 3,
+                'quad'       => 4,
+                'shared'     => 1,
+                'additional' => 1,
+            ];
+
+            $roomCounts = [];
+            $totalPackageAndMealCost = 0;
+            $updatedRoomTypes = [];
+            $seatsChangedCount = 0;
+            $roomChangesDetails = [];
+
+            if ($request->has('seats')) {
+                foreach ($request->seats as $seatId => $seatData) {
+                    $seat = $booking->bookingSeats->firstWhere('id', $seatId);
+
+                    if ($seat) {
+                        $mealCost = 0;
+                        $includedMealsInPackage = ['breakfast' => false, 'lunch' => false, 'dinner' => false];
+
+                        $oldRoomType = $seat->room_type;
+                        $newRoomType = strtolower(trim($seatData['room_type'] ?? ''));
+                        $roomPackage = trim($seatData['room_package'] ?? '');
+
+                        $isRoomShared = ($newRoomType === 'shared') || (!empty($seatData['is_room_shared']) && ($seatData['is_room_shared'] == '1' || $seatData['is_room_shared'] == 'true'));
+
+
+                        // تحسين التعرف على الغرفة المشتركة القديمة والجديدة
+                        $isOldShared = \Illuminate\Support\Str::contains($oldRoomType, ['مشتركة', 'shared']) || !is_null($seat->trip_room_id);
+                        $isNewShared = ($newRoomType === 'shared') || (!empty($seatData['is_room_shared']) && ($seatData['is_room_shared'] == '1' || $seatData['is_room_shared'] == 'true'));
+
+                        // يتحقق من تغيير نوع الغرفة فقط إذا انتقل من مشتركة إلى خاصة أو العكس
+                        $roomTypeChanged = false;
+                        if ($isOldShared && !$isNewShared) {
+                            $roomTypeChanged = true;
+                        } elseif (!$isOldShared && $newRoomType !== strtolower(trim($oldRoomType))) {
+                            $roomTypeChanged = true;
+                        }
+
+                        if ($roomTypeChanged) {
+                            $seatsChangedCount++;
+                            $seatIdentifier = is_array($seat->seat_number) ? implode(', ', $seat->seat_number) : ($seat->seat_number ?? $seat->id);
+                            $roomChangesDetails[] = "مقعد {$seatIdentifier}: [{$oldRoomType} -> {$newRoomType}]";
+
+                            // تصفير الغرفة المشتركة فقط عند التحول إلى غرفة غير مشتركة
+                            $seat->trip_room_id = null;
+                        }
+
+                        // توحيد القيمة للغرفة المشتركة
+                        $seat->room_type = $isNewShared ? 'shared' : $newRoomType;
+                        $updatedRoomTypes[] = $seat->room_type;
+
+                        if ($isRoomShared || $newRoomType === 'shared' || $newRoomType === 'additional') {
+                            $baseTripPrice = (float)($trip->price ?? 0);
+                            $totalPackageAndMealCost += $baseTripPrice;
+                        } else if (!empty($newRoomType)) {
+                            $roomCounts[$newRoomType] = ($roomCounts[$newRoomType] ?? 0) + 1;
+                        }
+
+                        $matchedRoomDetails = null;
+                        if (is_array($tripRoomOptions)) {
+                            foreach ($tripRoomOptions as $key => $details) {
+                                if (strtolower(trim($key)) === $newRoomType) {
+                                    $matchedRoomDetails = $details;
+                                    break;
+                                }
+                            }
+                        }
+
+                        $packagePrice = 0;
+                        if (!empty($roomPackage) && !empty($matchedRoomDetails['packages'])) {
+                            foreach ($matchedRoomDetails['packages'] as $pkg) {
+                                if (trim($pkg['name']) === $roomPackage) {
+                                    $packagePrice = (float)($pkg['price'] ?? 0);
+                                    $includedMealsInPackage = $pkg['meals'] ?? $includedMealsInPackage;
+                                    break;
+                                }
+                            }
+                        }
+
+                        $seat->room_options = [
+                            'package_name'   => $roomPackage,
+                            'price'          => $packagePrice,
+                            'included_meals' => $includedMealsInPackage,
+                            'is_shared'      => $isRoomShared,
+                        ];
+
+                        $mealPackage = $seatData['meal_package'] ?? null;
+
+                        if (!empty($mealPackage)) {
+                            $packagePriceMeal = (float)($mealPackages[$mealPackage] ?? 0);
+                            $mealCost = $packagePriceMeal;
+
+                            $seat->with_breakfast = in_array($mealPackage, ['all', 'bf_ln', 'bf_dn', 'full']);
+                            $seat->with_lunch     = in_array($mealPackage, ['all', 'bf_ln', 'ln_dn', 'full']);
+                            $seat->with_dinner    = in_array($mealPackage, ['all', 'ln_dn', 'bf_dn', 'full']);
+
+                            $seat->breakfast_price = 0;
+                            $seat->lunch_price     = 0;
+                            $seat->dinner_price    = 0;
+
+                            $seat->meal_options = [
+                                'type'          => 'package',
+                                'package_key'   => $mealPackage,
+                                'package_price' => $packagePriceMeal
+                            ];
+                        } else {
+                            // مطابقة مع حقول الفرونت إند [bf], [ln], [dn]
+                            $seat->with_breakfast = (isset($seatData['bf']) && $seatData['bf'] == '1') || ($includedMealsInPackage['breakfast'] ?? false);
+                            $seat->with_lunch     = (isset($seatData['ln']) && $seatData['ln'] == '1') || ($includedMealsInPackage['lunch'] ?? false);
+                            $seat->with_dinner    = (isset($seatData['dn']) && $seatData['dn'] == '1') || ($includedMealsInPackage['dinner'] ?? false);
+
+                            $seat->breakfast_price = ($seat->with_breakfast && !($includedMealsInPackage['breakfast'] ?? false)) ? (float)($individualMeals['breakfast']['price'] ?? 0) : 0;
+                            $seat->lunch_price     = ($seat->with_lunch && !($includedMealsInPackage['lunch'] ?? false)) ? (float)($individualMeals['lunch']['price'] ?? 0) : 0;
+                            $seat->dinner_price    = ($seat->with_dinner && !($includedMealsInPackage['dinner'] ?? false)) ? (float)($individualMeals['dinner']['price'] ?? 0) : 0;
+
+                            $mealCost = $seat->breakfast_price + $seat->lunch_price + $seat->dinner_price;
+
+                            $seat->meal_options = [
+                                'type'        => 'individual',
+                                'package_key' => null
+                            ];
+                        }
+
+                        // معالجة الخدمات الإضافية المعدلة
+                        $extraServicesCost = 0;
+                        $savedExtraServices = [];
+
+                        if (!empty($seatData['extra_services']) && is_array($seatData['extra_services'])) {
+                            foreach ($seatData['extra_services'] as $srv) {
+                                if (isset($srv['selected']) && ($srv['selected'] == '1' || $srv['selected'] == 'true')) {
+                                    $srvPrice = (float)($srv['price'] ?? 0);
+                                    $extraServicesCost += $srvPrice;
+
+                                    $savedExtraServices[] = [
+                                        'name'        => $srv['name'] ?? '',
+                                        'price'       => $srvPrice,
+                                        'description' => $srv['description'] ?? '',
+                                    ];
+                                }
+                            }
+                        }
+
+                        $seat->extra_services = !empty($savedExtraServices) ? $savedExtraServices : null;
+                        $seat->save();
+
+                        if ($seat->trip_room_id) {
+                            $cap = $capacities[$newRoomType] ?? 1;
+                            $seatNumStr = is_array($seat->seat_number) ? implode('-', $seat->seat_number) : $seat->seat_number;
+
+                            TripRoom::where('id', $seat->trip_room_id)->update([
+                                'room_type' => $newRoomType,
+                                'room_uid'  => "room_{$cap}_" . $seatNumStr
+                            ]);
+                        }
+
+                        $totalPackageAndMealCost += ($packagePrice + $mealCost + $extraServicesCost);
+                    }
                 }
             }
-        }
-        if (empty($savedAccounts)) {
-            $savedAccounts = [['bank_name' => '', 'iban' => '', 'account_number' => '', 'qr_code' => '']];
-        }
-        // تجهيز رابط صورة QR لكل حساب
-        $savedAccounts = array_map(function ($a) {
-            $p = $a['qr_code'] ?? '';
-            $a['qr_url'] = $p ? (str_starts_with($p, 'storage/') ? asset($p) : asset('storage/' . $p)) : '';
-            return $a;
-        }, $savedAccounts);
 
-        // ----- الملاحظات الافتراضية -----
-        $defaultNotes =
-            "شروط وملاحظات عامة للرحلة:\n" .
-            "• الالتزام بوقت التجمع والانطلاق، والتأخير قد يؤدي إلى مغادرة الرحلة دون انتظار.\n" .
-            "• التأكد من إحضار الهوية / الوثائق المطلوبة وأي تصاريح لازمة.\n" .
-            "• الالتزام بتعليمات المنظم وقواعد السلامة طوال الرحلة.\n" .
-            "• كل مشارك مسؤول عن أغراضه الشخصية ومقتنياته.\n" .
-            "• الالتزام بالأنظمة والتعليمات الخاصة بالموقع أو الوجهة.\n" .
-            "• المحافظة على نظافة المكان وعدم ترك المخلفات.\n" .
-            "• يمنع التصرفات التي قد تعرض الشخص أو الآخرين للخطر.\n" .
-            "• البرنامج والأوقات قابلة للتعديل عند الحاجة وفقًا للظروف أو تعليمات الجهة المنظمة.\n" .
-            '• التسجيل في الرحلة يعني الاطلاع على الشروط والملاحظات والموافقة عليها.';
-
-        // ----- الحالة الابتدائية لنموذج Alpine -----
-        $formState = [
-            'tripType' => old('trip_type', $trip->trip_type ?: 'one_way'),
-            'transport' => old('transport_type', $trip->transport_type ?: 'bus'),
-            'routeType' => old('route_type', $trip->route_type ?: 'domestic'),
-            'departureAt' => old('departure_at', $dt($trip->departure_at ?? null)),
-            'returnAt' => old('return_at', $dt($trip->return_at ?? null)),
-            'seats' => (string) old('total_seats', $trip->total_seats ?? ''),
-            'isConditional' => $bool('is_conditional', $trip->is_conditional ?? false),
-            'hasBreakfast' => $bool('bf_price_active', !empty($trip->breakfast_price)),
-            'hasLunch' => $bool('ln_price_active', !empty($trip->lunch_price)),
-            'hasDinner' => $bool('dn_price_active', !empty($trip->dinner_price)),
-            'sharedRooms' => $bool('allows_shared_rooms', $trip->allows_shared_rooms ?? false),
-            'extraSeat' => $bool('allow_to_add_seat', $trip->allow_to_add_seat ?? false),
-            'autoSeating' => $bool('is_security_approved', $trip->is_security_approved ?? true),
-            'accomOnly' => $bool('allow_accommodation_only', $trip->allow_accommodation_only ?? true),
-
-            'overflowEnabled' => $bool('overflow_enabled', $trip->overflow_enabled ?? false),
-            'overflowSeats' => (string) old('overflow_total_seats', $overflowTrip->total_seats ?? ''),
-        ];
-    @endphp
-
-
-    <div class="container mx-auto px-4 py-8 max-w-5xl text-right" dir="rtl">
-
-        {{-- ═════════════ أخطاء السيرفر ═════════════ --}}
-        @if ($errors->any())
-            <div class="rise mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-sm font-bold shadow-sm">
-                <div class="flex items-center gap-2 mb-2 text-base">
-                    <span>⚠️</span><span>لم يتم نشر الرحلة بسبب النواقص التالية:</span>
-                </div>
-                <ul class="list-disc list-inside pr-4 text-xs font-semibold space-y-1">
-                    @foreach ($errors->all() as $error)
-                        <li>{{ $error }}</li>
-                    @endforeach
-                </ul>
-            </div>
-        @endif
-
-        {{-- ═════════════ الهيدر ═════════════ --}}
-        <header class="rise flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
-            <div>
-                <h1 class="text-3xl font-black text-slate-800 flex items-center gap-3">
-                    <span
-                        class="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center shadow-lg shadow-blue-100">🚀</span>
-                    {{ isset($trip->id) ? 'تعديل بيانات الرحلة' : 'إضافة رحلة جديدة' }}
-                </h1>
-                <p class="text-sm text-slate-400 mt-2 font-medium">قم بتعبئة بيانات الرحلة وتسميتها لنشرها في "عبور"</p>
-            </div>
-            <div class="flex items-center gap-2 bg-white p-2 rounded-2xl border border-slate-100 shadow-sm">
-                <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                <span class="text-xs font-bold text-slate-500 uppercase tracking-widest">Agency Mode</span>
-            </div>
-        </header>
-
-
-        {{-- ╔══════════════════════════════════════════════════════════════╗
-             ║  2) النموذج                                                   ║
-             ╚══════════════════════════════════════════════════════════════╝ --}}
-        <form method="POST" enctype="multipart/form-data" class="stagger flex flex-col gap-6"
-            action="{{ isset($trip->id) ? route('agency.trips.update', $trip->id) : route('agency.trips.store') }}"
-            x-data="tripForm(@js($formState))" @submit="lock()" @pageshow.window="submitting = false">
-
-            <div hidden>
-                @csrf
-                @if (isset($trip->id))
-                    @method('PUT')
-                @endif
-                @if ($selectedUserId)
-                    <input type="hidden" name="user_id" value="{{ $selectedUserId }}">
-                @endif
-                @if ($selectedRequestId)
-                    <input type="hidden" name="private_trip_request_id" value="{{ $selectedRequestId }}">
-                @endif
-            </div>
-
-
-            {{-- ═════════════ (أ) البيانات الأساسية + الغلاف ═════════════ --}}
-            <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                {{-- ----- العمود الأيمن (2/3) ----- --}}
-                <div class="lg:col-span-2 flex flex-col gap-6">
-
-                    {{-- كارت العميل (رحلة خاصة) --}}
-                    @if ($hasCustomer)
-                        <div
-                            class="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent p-6 rounded-[2rem] border border-amber-200/80 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
-                            <div class="flex items-center gap-4">
-                                <div
-                                    class="w-14 h-14 rounded-2xl bg-amber-500 text-white flex items-center justify-center text-2xl shadow-md shadow-amber-500/20">
-                                    👤</div>
-                                <div>
-                                    <div class="flex items-center gap-2">
-                                        <span
-                                            class="bg-amber-500 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">رحلة
-                                            خاصة مخصصة</span>
-                                        @if ($selectedRequestId)
-                                            <span class="text-xs text-amber-800 font-bold">#طلب رقم
-                                                {{ $selectedRequestId }}</span>
-                                        @endif
-                                    </div>
-                                    <h3 class="text-base font-black text-slate-800 mt-1">
-                                        {{ $targetUser->name ?? 'عميل محدد' }}</h3>
-                                    <p class="text-xs text-slate-500 font-semibold flex items-center gap-2 mt-0.5">
-                                        <span>📞 {{ $targetUser->phone ?? 'غير متوفر' }}</span>
-                                        @if (!empty($targetUser->email))
-                                            <span>• ✉️ {{ $targetUser->email }}</span>
-                                        @endif
-                                    </p>
-                                </div>
-                            </div>
-                            <div
-                                class="text-xs font-bold text-amber-800 bg-amber-100/80 px-4 py-2 rounded-xl border border-amber-200 text-center">
-                                سيتم تخصيص هذه الرحلة لهذا العميل مباشرة 🎯
-                            </div>
-                        </div>
-                    @endif
-
-                    {{-- التسمية + النظام + النقل + المسار --}}
-                    <div class="card">
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-
-                            <div class="md:col-span-3">
-                                <label class="field-label">تسمية الرحلة (العنوان التسويقي)</label>
-                                <input type="text" name="title" required placeholder="مثلاً: رحلة خاصة - العائلات"
-                                    value="{{ old('title', $trip->title ?? '') }}"
-                                    class="field-input !text-lg !py-4 @error('title') is-invalid @enderror">
-                                @error('title')
-                                    <p class="field-error">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            @foreach ($choiceGroups as [$name, $model, $label, $acc, $options])
-                                <div>
-                                    <label class="field-label">{{ $label }}</label>
-                                    <div class="grid grid-cols-2 gap-2">
-                                        @foreach ($options as [$value, $icon, $text])
-                                            <label class="opt acc-{{ $acc }}">
-                                                <input type="radio" name="{{ $name }}"
-                                                    value="{{ $value }}" x-model="{{ $model }}"
-                                                    class="opt-input sr-only">
-                                                <span
-                                                    class="opt-pill"><span>{{ $icon }}</span><span>{{ $text }}</span></span>
-                                            </label>
-                                        @endforeach
-                                    </div>
-                                </div>
-                            @endforeach
-                        </div>
-                    </div>
-
-                    {{-- المسار والتوقيت --}}
-                    <div class="card">
-                        <h2 class="card-title">
-                            <span class="card-icon bg-blue-100 text-blue-600">🧭</span> المسار والتوقيت
-                        </h2>
-
-                        {{-- المدن --}}
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            @foreach ($cityFields as [$field, $label, $placeholder])
-                                <div class="relative" :class="open ? 'z-30' : 'z-10'" x-data="citySelect(@js(old($field, $trip->{$field} ?? '')))"
-                                    @click.outside="open = false" @keydown.escape="open = false">
-
-                                    <label class="field-label">{{ $label }}</label>
-
-                                    <div class="relative">
-                                        {{-- حقل مخفي بصرياً حتى يعمل required فعلياً --}}
-                                        <input type="text" name="{{ $field }}" :value="selected" required
-                                            tabindex="-1" class="absolute inset-0 w-full opacity-0 pointer-events-none"
-                                            @focus="open = true">
-
-                                        <button type="button" @click="toggle()"
-                                            class="field-input flex items-center justify-between text-right hover:bg-slate-100/80">
-                                            <span x-text="selected || '{{ $placeholder }}'"
-                                                :class="selected ? 'text-slate-800' : 'text-slate-400'"></span>
-                                            <svg class="w-4 h-4 text-slate-400 transition-transform duration-300"
-                                                :class="open && 'rotate-180 text-blue-500'" fill="none"
-                                                stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
-                                                    d="M19 9l-7 7-7-7" />
-                                            </svg>
-                                        </button>
-
-                                        <div x-show="open" x-cloak x-bind="popFx"
-                                            class="absolute top-full right-0 z-50 mt-1.5 w-full bg-white rounded-xl shadow-xl border border-slate-100 p-1.5 max-h-56 overflow-y-auto soft-scroll">
-                                            <div class="sticky top-0 bg-white pb-1.5 z-10">
-                                                <input type="text" x-ref="q" x-model="search"
-                                                    placeholder="ابحث عن مدينة..."
-                                                    class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none focus:border-blue-500">
-                                            </div>
-                                            <div class="space-y-0.5">
-                                                <template x-for="city in filtered" :key="city">
-                                                    <button type="button" @click="pick(city)" x-text="city"
-                                                        class="w-full text-right px-2.5 py-1.5 text-xs font-bold rounded-lg transition-colors hover:bg-slate-50"
-                                                        :class="selected === city ? 'bg-blue-50 text-blue-600' :
-                                                            'text-slate-600'"></button>
-                                                </template>
-                                                <div x-show="!filtered.length"
-                                                    class="text-center py-3 text-xs text-slate-400">لا توجد نتائج 🔍</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            @endforeach
-                        </div>
-
-                        {{-- تاريخ الانطلاق --}}
-                        <div class="mt-5">
-                            <label for="departure_at_input" class="field-label">تاريخ الانطلاق</label>
-                            <input type="datetime-local" name="departure_at" id="departure_at_input" required
-                                x-model="departureAt" class="field-input @error('departure_at') is-invalid @enderror">
-                            @error('departure_at')
-                                <p class="field-error">⚠️ {{ $message }}</p>
-                            @enderror
-                        </div>
-
-                        {{-- تفاصيل العودة + الأيام والليالي (تنزلق عند اختيار ذهاب وعودة) --}}
-                        <div class="reveal" :class="{ open: isRound }">
-                            <div class="reveal-inner" :inert="!isRound">
-                                <div class="mt-5 p-5 rounded-2xl bg-blue-50/40 border border-dashed border-blue-200">
-                                    <p class="text-[11px] font-black text-blue-500 mb-4 uppercase tracking-widest">تفاصيل
-                                        العودة</p>
-
-                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div>
-                                            <label class="field-label">تاريخ العودة</label>
-                                            <input type="datetime-local" name="return_at" id="return_at_input"
-                                                x-model="returnAt" :min="departureAt" :required="isRound"
-                                                class="field-input !bg-white @error('return_at') is-invalid @enderror">
-                                            @error('return_at')
-                                                <p class="field-error">{{ $message }}</p>
-                                            @enderror
-                                        </div>
-
-                                        <div>
-                                            <label class="field-label">☀️ مدة الرحلة (أيام)</label>
-                                            <input type="number" name="duration_days" id="duration_days_input" readonly
-                                                min="1" required :value="days"
-                                                class="field-input @error('duration_days') is-invalid @enderror">
-                                            @error('duration_days')
-                                                <p class="field-error">{{ $message }}</p>
-                                            @enderror
-                                        </div>
-
-                                        <div>
-                                            <label class="field-label">🌙 عدد الليالي</label>
-                                            <input type="number" name="duration_nights" id="duration_nights_input"
-                                                readonly min="0" :value="nights"
-                                                class="field-input @error('duration_nights') is-invalid @enderror">
-                                            @error('duration_nights')
-                                                <p class="field-error">{{ $message }}</p>
-                                            @enderror
-                                        </div>
-                                    </div>
-
-                                    <p x-show="invalidReturn" x-transition class="field-error">⚠️ تاريخ العودة يجب أن يكون
-                                        بعد تاريخ الانطلاق.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {{-- في حالة الذهاب فقط تُرسل القيم الافتراضية (يوم واحد / صفر ليالي) --}}
-                        <template x-if="!isRound">
-                            <div hidden>
-                                <input type="hidden" name="duration_days" value="1">
-                                <input type="hidden" name="duration_nights" value="0">
-                            </div>
-                        </template>
-                    </div>
-                </div>
-
-                {{-- ----- العمود الأيسر (1/3) ----- --}}
-                <div class="flex flex-col gap-6">
-
-                    {{-- صورة الغلاف --}}
-                    <div x-data="coverImage(@js($coverImageUrl))" :style="preview ? `background-image:url('${preview}')` : ''"
-                        class="relative w-full h-[220px] border-2 border-dashed border-slate-200 rounded-[2rem] overflow-hidden bg-cover bg-center hover:border-blue-300 transition-colors duration-300 group">
-                        <label
-                            class="w-full h-full flex flex-col items-center justify-center cursor-pointer p-4 transition-colors duration-300"
-                            :class="preview ? 'bg-white/30 hover:bg-white/60' : 'bg-white/80 hover:bg-slate-50'">
-                            <input type="file" name="cover_image" accept="image/*" class="sr-only"
-                                @change="pick($event)">
-                            <span x-show="!preview"
-                                class="text-4xl mb-3 group-hover:scale-110 transition-transform duration-300">🖼️</span>
-                            <span class="text-xs font-black text-slate-600 uppercase tracking-widest px-3 py-1 rounded-lg"
-                                :class="preview && 'bg-white/80'"
-                                x-text="changed ? 'تم اختيار صورة جديدة (اضغط للتغيير)' : (preview ? 'تغيير صورة الغلاف' : 'صورة الغلاف للرحلة')"></span>
-                        </label>
-                    </div>
-
-                    {{-- رحلة خاصة (VIP) --}}
-                    @if ($hasCustomer)
-                        <div class="card !p-6 flex items-center justify-between gap-3">
-                            <div class="flex items-center gap-3">
-                                <span class="card-icon bg-amber-50 text-amber-600 border border-amber-100">👑</span>
-                                <div>
-                                    <h4 class="text-xs font-black text-slate-800">تفعيل رحلة خاصة</h4>
-                                    <p class="text-[10px] text-slate-400 font-bold">رحلة خاصة غير مدرجة للعامة (VIP)</p>
-                                </div>
-                            </div>
-                            <label class="switch acc-amber">
-                                <input type="checkbox" name="is_private" value="1" class="sr-only"
-                                    {{ $bool('is_private', $trip->is_private ?? false) || $selectedUserId ? 'checked' : '' }}>
-                                <span class="switch-track"></span>
-                            </label>
-                        </div>
-                    @endif
-
-                    {{-- نوع المركبة وعدد المقاعد --}}
-                    <div class="card !p-6">
-                        <label class="field-label"
-                            x-text="transport === 'flight' ? 'نوع الطائرة وعدد المقاعد' : 'نوع المركبة وعدد المقاعد'">نوع
-                            المركبة وعدد المقاعد</label>
-                        <select name="total_seats" required @change="seats = $event.target.value"
-                            class="field-input @error('total_seats') is-invalid @enderror">
-                            <option value="" disabled :selected="!seats">اختر النوع وعدد المقاعد...</option>
-                            <template x-for="o in seatOptions" :key="o.value">
-                                <option :value="o.value" x-text="o.text" :selected="o.value == seats"></option>
-                            </template>
-                        </select>
-                        @error('total_seats')
-                            <p class="field-error">{{ $message }}</p>
-                        @enderror
-                    </div>
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (ب) رحلة مشروطة (نظام تجميع المسافرين) ═════════════ --}}
-            <section class="card border-amber-100 bg-gradient-to-br from-white to-amber-50/30">
-                <div class="flex items-center justify-between gap-4">
-                    <div class="flex items-center gap-3">
-                        <span class="card-icon bg-amber-100 text-amber-700">🎯</span>
-                        <div>
-                            <label for="is_conditional"
-                                class="text-sm font-black text-slate-800 block cursor-pointer select-none">
-                                رحلة مشروطة باكتفاء العدد (نظام تجميع المسافرين)
-                            </label>
-                            <span class="text-[11px] text-slate-400 block font-medium mt-0.5 leading-relaxed">
-                                تفعيل هذا الخيار يجعل الرحلة تتطلب حجز عدد محدد من المقاعد قبل المهلة لتأكيد الانطلاق، وفي
-                                حال عدم اكتمال العدد يُلغى الطلب تلقائياً.
-                            </span>
-                        </div>
-                    </div>
-                    <label class="switch acc-amber">
-                        <input type="checkbox" name="is_conditional" id="is_conditional" value="1"
-                            x-model="isConditional" class="sr-only">
-                        <span class="switch-track"></span>
-                    </label>
-                </div>
-
-                <div class="reveal" :class="{ open: isConditional }">
-                    <div class="reveal-inner" :inert="!isConditional">
-                        <div class="mt-6 pt-6 border-t border-amber-100/80 grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label class="field-label">الحد الأدنى للمقاعد لتأكيد الرحلة <span
-                                        class="text-red-500">*</span></label>
-                                <input type="number" name="min_seats_required" min="1"
-                                    placeholder="مثلاً: 10 مقاعد" :required="isConditional"
-                                    value="{{ old('min_seats_required', $trip->min_seats_required ?? '') }}"
-                                    class="field-input focus:!border-amber-500 focus:!ring-amber-500/10 @error('min_seats_required') is-invalid @enderror">
-                                @error('min_seats_required')
-                                    <p class="field-error">{{ $message }}</p>
-                                @enderror
-                            </div>
-                            <div>
-                                <label class="field-label">المهلة الزمنية لاكتمال العدد <span
-                                        class="text-red-500">*</span></label>
-                                <input type="datetime-local" name="threshold_deadline_at" :required="isConditional"
-                                    value="{{ old('threshold_deadline_at', $dt($trip->threshold_deadline_at ?? null)) }}"
-                                    class="field-input focus:!border-amber-500 focus:!ring-amber-500/10 @error('threshold_deadline_at') is-invalid @enderror">
-                                @error('threshold_deadline_at')
-                                    <p class="field-error">{{ $message }}</p>
-                                @enderror
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (ج) المميزات ═════════════ --}}
-            <section class="card" x-data="featuresPicker(@js($customFeatures))">
-                <h2 class="card-title"><span class="card-icon bg-amber-100 text-amber-600">✨</span> مميزات الرحلة وكوادرها
-                </h2>
-
-                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-                    @foreach ($predefinedFeatures as $featureName)
-                        <label class="opt acc-blue">
-                            <input type="checkbox" name="features[]" value="{{ $featureName }}"
-                                class="opt-input sr-only" {{ in_array($featureName, $currentFeatures) ? 'checked' : '' }}>
-                            <span class="opt-pill sm">{{ $featureName }}</span>
-                        </label>
-                    @endforeach
-                </div>
-
-                <div class="border-t border-slate-100 pt-6">
-                    <label class="field-label">هل لديك مميزات إضافية تريد كتابتها؟</label>
-                    <div class="flex gap-2 max-w-md">
-                        <input type="text" x-model="draft" @keydown.enter.prevent="add()"
-                            placeholder="مثال: حافلات VIP حديثة، عشاء فاخر..." class="field-input !py-2.5 !text-xs">
-                        <button type="button" @click="add()"
-                            class="btn bg-slate-900 hover:bg-slate-800 text-white shrink-0">إضافة +</button>
-                    </div>
-
-                    <div class="flex flex-wrap gap-2 mt-4" x-show="items.length">
-                        <template x-for="(feature, i) in items" :key="feature + i">
-                            <div
-                                class="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-black bg-blue-50 border border-blue-100 text-blue-700 shadow-sm">
-                                <input type="hidden" name="features[]" :value="feature">
-                                <span x-text="feature"></span>
-                                <button type="button" @click="items.splice(i, 1)"
-                                    class="text-blue-400 hover:text-blue-600 transition-colors">✕</button>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (د) الخدمات الإضافية ═════════════ --}}
-            <section class="card" x-data="extraServices(@js($currentExtraServices))">
-                <h2 class="card-title"><span class="card-icon bg-purple-100 text-purple-600">🧰</span> الخدمات الإضافية
-                    والطلبات الخاصة (اختياري للمسافر)</h2>
-                <p class="text-xs text-slate-500 font-medium -mt-4 mb-6">
-                    أضف الخدمات التي يمكن للمسافر طلبها ودفع قيمتها أثناء اختيار المقاعد (مثل: حضانة الأطفال، كرسي متحرك،
-                    حقائب إضافية...).
-                </p>
-
-                <div class="bg-slate-50 p-4 rounded-2xl border border-slate-100 mb-6">
-                    <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                        <div class="md:col-span-5">
-                            <label class="field-label">اسم الخدمة <span class="text-red-500">*</span></label>
-                            <input type="text" x-model="draft.name" @keydown.enter.prevent="add()"
-                                placeholder="مثال: خدمة حضانة الأطفال، حقيبة إضافية..."
-                                class="field-input !bg-white !py-2.5 !text-xs focus:!border-purple-500 focus:!ring-purple-500/10">
-                        </div>
-                        <div class="md:col-span-3">
-                            <label class="field-label">السعر (ر.س)</label>
-                            <input type="number" step="0.01" min="0" x-model="draft.price"
-                                @keydown.enter.prevent="add()" placeholder="0.00 (ضع 0 للمجاني)"
-                                class="field-input !bg-white !py-2.5 !text-xs focus:!border-purple-500 focus:!ring-purple-500/10">
-                        </div>
-                        <div class="md:col-span-4">
-                            <label class="field-label">وصف الخدمة (اختياري)</label>
-                            <input type="text" x-model="draft.description" @keydown.enter.prevent="add()"
-                                placeholder="مثال: رعاية الطفل طوال وقت السفر..."
-                                class="field-input !bg-white !py-2.5 !text-xs focus:!border-purple-500 focus:!ring-purple-500/10">
-                        </div>
-                    </div>
-
-                    <div class="mt-3 flex items-center justify-between gap-3">
-                        <p x-show="error" x-transition x-text="error" class="field-error !mt-0"></p>
-                        <button type="button" @click="add()"
-                            class="btn bg-purple-600 hover:bg-purple-700 text-white mr-auto">+ إضافة الخدمة للرحلة</button>
-                    </div>
-                </div>
-
-                <div x-show="services.length" class="space-y-3">
-                    <label class="field-label">الخدمات المضافة للرحلة حالياً:</label>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <template x-for="(service, i) in services" :key="service.uid">
-                            <div
-                                class="flex items-center justify-between p-4 bg-white border border-slate-200 rounded-2xl shadow-sm hover:border-purple-300 transition-colors duration-200">
-                                <input type="hidden" :name="`extra_services[${i}][name]`" :value="service.name">
-                                <input type="hidden" :name="`extra_services[${i}][price]`" :value="service.price">
-                                <input type="hidden" :name="`extra_services[${i}][description]`"
-                                    :value="service.description">
-
-                                <div class="flex-grow pl-3">
-                                    <div class="flex items-center gap-2">
-                                        <span class="font-black text-xs text-slate-800" x-text="service.name"></span>
-                                        <span
-                                            class="px-2 py-0.5 rounded-lg text-[10px] font-black bg-purple-50 text-purple-700 border border-purple-100"
-                                            x-text="service.price > 0 ? service.price + ' ر.س' : 'مجاناً'"></span>
-                                    </div>
-                                    <p class="text-[11px] text-slate-400 mt-1"
-                                        x-text="service.description || 'بدون وصف إضافي'"></p>
-                                </div>
-
-                                <button type="button" @click="remove(i)"
-                                    class="w-8 h-8 rounded-xl bg-red-50 text-red-500 hover:bg-red-100 hover:text-red-600 flex items-center justify-center text-xs font-bold transition-colors shrink-0">✕</button>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-
-                <div x-show="!services.length" class="text-center py-6 border border-dashed border-slate-200 rounded-2xl">
-                    <p class="text-xs font-bold text-slate-400">لم تقم بإضافة أي خدمات إضافية لهذه الرحلة بعد.</p>
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (هـ) الوجبات ═════════════ --}}
-            <section class="card">
-                <h2 class="card-title"><span class="card-icon bg-orange-100 text-orange-600">🍽️</span> إعدادات الوجبات
-                    والأسعار الخاصة</h2>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-                    @foreach ($meals as [$model, $activeName, $priceName, $icon, $label, $placeholder])
-                        <div class="bg-slate-50 border border-slate-100 rounded-2xl p-5">
-                            <label class="flex items-center gap-3 cursor-pointer">
-                                <input type="hidden" name="{{ $activeName }}" value="false">
-                                <input type="checkbox" name="{{ $activeName }}" value="true"
-                                    x-model="{{ $model }}"
-                                    class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                                <span class="text-sm font-bold text-slate-700">{{ $icon }}
-                                    {{ $label }}</span>
-                            </label>
-
-                            <div class="reveal" :class="{ open: {{ $model }} }">
-                                <div class="reveal-inner" :inert="!{{ $model }}">
-                                    <input type="number" step="0.01" name="{{ $priceName }}"
-                                        placeholder="{{ $placeholder }}"
-                                        value="{{ old($priceName, $trip->{$priceName} ?? '') }}"
-                                        class="field-input !bg-white mt-4">
-                                </div>
-                            </div>
-                        </div>
-                    @endforeach
-                </div>
-
-                {{-- باقات الوجبات (تظهر عند تفعيل وجبتين أو أكثر) --}}
-                <div class="reveal" :class="{ open: mealCount >= 2 }">
-                    <div class="reveal-inner" :inert="mealCount < 2">
-                        <div class="border-t border-slate-100 pt-8 mt-8">
-                            <h3 class="text-sm font-black mb-6 flex items-center gap-3 text-emerald-700">
-                                <span class="card-icon !w-8 !h-8 bg-emerald-100 text-emerald-600">💰</span> أسعار باقات
-                                الوجبات (الخصومات)
-                            </h3>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                @foreach ($bundles as [$name, $label, $cond, $full])
-                                    <div x-show="{{ $cond }}" x-bind="viewFx"
-                                        class="rounded-2xl p-5 border {{ $full ? 'bg-blue-50 border-blue-100 md:col-span-2' : 'bg-emerald-50/50 border-emerald-100' }}">
-                                        <label
-                                            class="block text-sm font-bold mb-3 {{ $full ? 'text-blue-900' : 'text-emerald-900' }}">{{ $label }}</label>
-                                        <input type="number" step="0.01" name="{{ $name }}"
-                                            value="{{ old($name, $trip->{$name} ?? '') }}" class="field-input !bg-white">
-                                    </div>
-                                @endforeach
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (و) السكن والأسعار ═════════════ --}}
-            <section class="card">
-                <h2 class="card-title"><span class="card-icon bg-emerald-100 text-emerald-600">🏨</span> توزيع السكن
-                    والأسعار التفصيلية للغرف وباقات الوجبات</h2>
-
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                    @foreach ($roomTypes as $key => $label)
-                        <div x-data="roomPackages('{{ $key }}', @js(old("room_options.$key.packages", $roomOptions[$key]['packages'] ?? [])))"
-                            class="relative bg-slate-50/60 p-6 pt-8 rounded-3xl border border-slate-100">
-
-                            <div
-                                class="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-white border border-slate-100 rounded-full text-[10px] font-black text-slate-400">
-                                غرفة {{ $label }}
-                            </div>
-
-                            <div class="grid grid-cols-2 gap-2">
-                                <div>
-                                    <label class="text-[10px] font-bold text-slate-400 block mb-1">السعر</label>
-                                    <input type="number" min="0" name="room_options[{{ $key }}][price]"
-                                        value="{{ old("room_options.$key.price", $roomOptions[$key]['price'] ?? 0) }}"
-                                        class="field-input !bg-white !py-2 !px-3 !text-xs !text-blue-600">
-                                </div>
-                                <div>
-                                    <label class="text-[10px] font-bold text-slate-400 block mb-1">عدد الغرف</label>
-                                    <input type="number" min="0" name="room_options[{{ $key }}][count]"
-                                        value="{{ old("room_options.$key.count", $roomOptions[$key]['count'] ?? 0) }}"
-                                        class="field-input !bg-white !py-2 !px-3 !text-xs">
-                                </div>
-                            </div>
-
-                            <div class="border-t border-slate-200/60 pt-4 mt-4">
-                                <span class="text-[10px] font-black text-slate-500 block mb-2">🍱 باقات الوجبات
-                                    المخصصة:</span>
-
-                                <div class="space-y-3">
-                                    <template x-for="(pkg, i) in packages" :key="pkg.uid">
-                                        <div
-                                            class="relative bg-white p-3 rounded-2xl border border-slate-200/60 shadow-sm space-y-2.5">
-                                            <button type="button" @click="remove(i)"
-                                                class="absolute -top-2 -left-2 w-5 h-5 bg-red-50 text-red-500 hover:bg-red-100 rounded-full flex items-center justify-center text-[10px] border border-red-100 transition-colors">✕</button>
-
-                                            <div class="grid grid-cols-2 gap-2">
-                                                <input type="text" :name="n(i, 'name')" x-model="pkg.name"
-                                                    placeholder="الاسم" class="field-input !py-2 !px-2.5 !text-[11px]">
-                                                <input type="number" :name="n(i, 'price')" x-model="pkg.price"
-                                                    placeholder="ريال"
-                                                    class="field-input !py-2 !px-2.5 !text-[11px] !text-emerald-600">
-                                            </div>
-
-                                            <div class="flex items-center gap-1">
-                                                @foreach ([['breakfast', '🍳 فطور', 'emerald'], ['lunch', '🍽️ غداء', 'amber'], ['dinner', '🌙 عشاء', 'indigo']] as [$m, $ml, $mc])
-                                                    <button type="button"
-                                                        @click="pkg.meals.{{ $m }} = !pkg.meals.{{ $m }}"
-                                                        :class="pkg.meals.{{ $m }} ?
-                                                            'bg-{{ $mc }}-50 border-{{ $mc }}-200 text-{{ $mc }}-700' :
-                                                            'bg-slate-50 border-slate-100 text-slate-400'"
-                                                        class="flex-1 py-1.5 rounded-lg border text-[9px] font-bold transition-colors duration-200">{{ $ml }}</button>
-                                                    <input type="hidden" :name="n(i, 'meals', '{{ $m }}')"
-                                                        :value="pkg.meals.{{ $m }} ? 1 : 0">
-                                                @endforeach
-                                            </div>
-                                        </div>
-                                    </template>
-                                </div>
-
-                                <button type="button" @click="add()"
-                                    class="w-full mt-3 py-2 border border-dashed border-slate-300 rounded-xl text-[10px] font-bold text-slate-500 hover:text-blue-600 hover:border-blue-300 transition-colors">
-                                    ➕ إضافة باقة وجبات
-                                </button>
-                            </div>
-                            {{-- متاحة للمشاركة (تظهر فقط لو فعّلت الغرف المشتركة) --}}
-                            <div x-show="sharedRooms" x-transition class="mt-3">
-                                <input type="hidden" name="room_options[{{ $key }}][shared]" value="0"
-                                    :disabled="!sharedRooms">
-                                <label
-                                    class="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-100 bg-indigo-50/50 cursor-pointer hover:bg-indigo-50 transition-colors">
-                                    <input type="checkbox" name="room_options[{{ $key }}][shared]"
-                                        value="1" :disabled="!sharedRooms"
-                                        class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                                        {{ old("room_options.$key.shared", $roomOptions[$key]['shared'] ?? false) ? 'checked' : '' }}>
-                                    <span class="text-[10px] font-black text-indigo-700">👥 متاحة للمشاركة</span>
-                                </label>
-                            </div>
-                        </div>
-                    @endforeach
-                </div>
-
-                {{-- المفاتيح --}}
-                @foreach ($toggles as [$name, $model, $icon, $tone, $title, $desc])
-                    <div class="toggle-row">
-                        <div class="flex items-center gap-3">
-                            <span class="card-icon !w-8 !h-8 !text-sm {{ $tone }}">{{ $icon }}</span>
-                            <div>
-                                <label for="{{ $name }}"
-                                    class="text-sm font-black text-slate-800 block cursor-pointer select-none">{{ $title }}</label>
-                                <span
-                                    class="text-[11px] text-slate-400 block font-medium mt-0.5 leading-relaxed">{{ $desc }}</span>
-                            </div>
-                        </div>
-                        <label class="switch">
-                            <input type="checkbox" name="{{ $name }}" id="{{ $name }}" value="1"
-                                x-model="{{ $model }}" class="sr-only">
-                            <span class="switch-track"></span>
-                        </label>
-                    </div>
-                @endforeach
-
-                {{-- خصم السكن فقط --}}
-                <div class="reveal" :class="{ open: accomOnly }">
-                    <div class="reveal-inner" :inert="!accomOnly">
-                        <div class="pt-5">
-                            <label class="field-label !text-sm !text-slate-700">
-                                قيمة الخصم المالي عند اختيار <span class="text-indigo-600">السكن فقط</span>
-                                <span class="text-red-600 font-extrabold">(يُطبق على كل فرد داخل الغرفة)</span>
-                            </label>
-                            <input type="number" step="0.01" min="0" name="accommodation_only_discount"
-                                placeholder="0.00"
-                                value="{{ old('accommodation_only_discount', $trip->accommodation_only_discount ?? '0.00') }}"
-                                class="field-input @error('accommodation_only_discount') is-invalid @enderror">
-                            @error('accommodation_only_discount')
-                                <p class="field-error">{{ $message }}</p>
-                            @enderror
-                        </div>
-                    </div>
-                </div>
-
-                {{-- سعر المقعد الإضافي --}}
-                <div class="mt-6 pt-5 border-t border-dashed border-slate-200">
-                    <label class="field-label">سعر المقعد الإضافي (للفرد)</label>
-                    <input type="number" min="0" name="price" placeholder="ريال سعودي"
-                        :required="sharedRooms" value="{{ old('price', $trip->price ?? 0) }}"
-                        class="field-input @error('price') is-invalid @enderror">
-                    @error('price')
-                        <p class="field-error">{{ $message }}</p>
-                    @enderror
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (ز) البنك + المركبة والكابتن ═════════════ --}}
-            <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                {{-- بيانات التحويل البنكي --}}
-                <div class="card lg:col-span-2" x-data="bankAccounts(@js($savedAccounts))">
-                    <div class="flex justify-between items-center mb-6">
-                        <h2 class="text-base font-black flex items-center gap-3 text-slate-800">
-                            <span class="card-icon bg-slate-100">💳</span> بيانات التحويل البنكي
-                        </h2>
-                        <button type="button" @click="add()"
-                            class="text-[10px] font-black bg-blue-50 text-blue-600 px-4 py-2 rounded-xl hover:bg-blue-600 hover:text-white transition-all duration-200">
-                            + إضافة حساب آخر
-                        </button>
-                    </div>
-
-                    <div class="space-y-4">
-                        <template x-for="(row, i) in rows" :key="row.id">
-                            <div
-                                class="relative grid grid-cols-1 md:grid-cols-3 gap-3 p-4 bg-slate-50/60 rounded-2xl border border-slate-100">
-
-                                <input type="text" :name="`bank_names[${i}]`" x-model="row.bank_name"
-                                    placeholder="اسم البنك" required class="field-input !bg-white">
-                                <input type="text" :name="`iban_numbers[${i}]`" x-model="row.iban"
-                                    placeholder="الايبان SA..." required class="field-input !bg-white" dir="ltr">
-                                <input type="text" :name="`account_number[${i}]`" x-model="row.account_number"
-                                    placeholder="رقم الحساب" required class="field-input !bg-white" dir="ltr">
-
-                                <label
-                                    class="relative overflow-hidden p-4 bg-white border border-dashed border-blue-200 rounded-xl text-center cursor-pointer hover:bg-blue-50 transition-colors duration-200 bg-cover bg-center"
-                                    :style="row.preview ? `background-image:url('${row.preview}')` : ''">
-                                    <input type="hidden" :name="`old_bank_images[${i}]`" :value="row.qr_code">
-                                    <input type="file" :name="`bank_images[${i}]`" accept="image/*" class="sr-only"
-                                        @change="pick(row, $event)">
-                                    <span class="relative z-10 text-[10px] font-black text-blue-600 pointer-events-none"
-                                        :class="row.preview && 'bg-white/90 px-2 py-1 rounded-md shadow-sm'"
-                                        x-text="row.preview ? '📎 تعديل صورة QR' : '📎 إرفاق صورة QR'"></span>
-                                </label>
-
-                                <button type="button" x-show="rows.length > 1" @click="remove(i)"
-                                    class="absolute -top-2 -left-2 bg-red-500 hover:bg-red-600 text-white w-5 h-5 rounded-full text-[10px] font-black flex items-center justify-center shadow-md transition-colors">✕</button>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-
-                {{-- المركبة والكابتن --}}
-                <div class="card lg:col-span-1 space-y-6">
-                    <label
-                        class="flex items-center gap-3 p-4 bg-amber-50 rounded-xl border border-amber-100 cursor-pointer">
-                        <input type="checkbox" name="auto_split" value="1" class="rounded text-amber-600"
-                            {{ $bool('auto_split', $trip->auto_split ?? false) ? 'checked' : '' }}>
-                        <span class="text-[10px] font-black text-amber-800 uppercase">فصل تلقائي (نساء / رجال)</span>
-                    </label>
-
-                    <div>
-                        <h2 class="text-base font-black mb-4 flex items-center gap-3 text-slate-800">
-                            <span class="card-icon !w-8 !h-8 !text-sm bg-slate-100 text-slate-600"
-                                x-text="transport === 'flight' ? '✈️' : '🚌'">🚌</span>
-                            المركبة المخصصة
-                        </h2>
-                        <select name="vehicle_id" class="field-input">
-                            <option value="" disabled
-                                {{ old('vehicle_id', $trip->vehicle_id ?? null) ? '' : 'selected' }}>اختر المركبة من
-                                الأسطول...</option>
-                            @foreach ($vehicles as $vehicle)
-                                <option value="{{ $vehicle->id }}"
-                                    {{ old('vehicle_id', $trip->vehicle_id ?? null) == $vehicle->id ? 'selected' : '' }}>
-                                    {{ $vehicle->vehicle_model }} - ({{ $vehicle->plate_number }}) | سعة
-                                    {{ $vehicle->total_seats }} مقعد
-                                </option>
-                            @endforeach
-                        </select>
-                    </div>
-
-                    <hr class="border-slate-100">
-
-                    <div>
-                        <h2 class="text-base font-black mb-4 flex items-center gap-3 text-slate-800">
-                            <span class="card-icon !w-8 !h-8 !text-sm bg-slate-100 text-slate-600">🪪</span> كابتن الرحلة
-                        </h2>
-                        <select name="driver_id" class="field-input">
-                            <option value="" disabled
-                                {{ old('driver_id', $trip->driver_id ?? null) ? '' : 'selected' }}>اختر كابتن الرحلة...
-                            </option>
-                            @foreach ($drivers as $driver)
-                                <option value="{{ $driver->id }}"
-                                    {{ old('driver_id', $trip->driver_id ?? null) == $driver->id ? 'selected' : '' }}>
-                                    {{ $driver->name }} - ({{ $driver->phone }})
-                                </option>
-                            @endforeach
-                        </select>
-                    </div>
-                </div>
-            </section>
-
-            {{-- ═════════════ (ز-٢) الباص الثاني الاحتياطي ═════════════ --}}
-            <section class="card border-sky-100 bg-gradient-to-br from-white to-sky-50/30" x-show="isBus" x-cloak>
-                <div class="flex items-center justify-between gap-4">
-                    <div class="flex items-center gap-3">
-                        <span class="card-icon bg-sky-100 text-sky-700">🚌</span>
-                        <div>
-                            <label for="overflow_enabled"
-                                class="text-sm font-black text-slate-800 block cursor-pointer select-none">
-                                باص ثاني احتياطي (يُفتح تلقائياً عند اكتمال الباص الأول)
-                            </label>
-                            <span class="text-[11px] text-slate-400 block font-medium mt-0.5 leading-relaxed">
-                                أول ما تمتلئ مقاعد هذي الرحلة، تظهر للعملاء رحلة ثانية بنفس البيانات والأسعار على باص آخر
-                                بمقاعده وكابتنه.
-                            </span>
-                        </div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" name="overflow_enabled" id="overflow_enabled" value="1"
-                            x-model="overflowEnabled" :disabled="!isBus || {{ $overflowActive ? 'true' : 'false' }}"
-                            class="sr-only">
-                        <span class="switch-track"></span>
-                    </label>
-                </div>
-
-                @if ($overflowTrip)
-                    <div
-                        class="mt-5 p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3
-                {{ $overflowActive ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100' }}">
-                        <div class="text-xs font-bold {{ $overflowActive ? 'text-emerald-800' : 'text-amber-800' }}">
-                            @if ($overflowActive)
-                                ✅ الباص الثاني مفعّل (رحلة #{{ $overflowTrip->id }}) وظاهر للعملاء.
-                                @if ($overflowHasBookings)
-                                    <span class="block font-semibold mt-1">عليه حجوزات، فما يمكن إغلاقه. عدّله من قائمة
-                                        الرحلات.</span>
-                                @endif
-                            @else
-                                ⏳ الباص الثاني جاهز كاحتياطي (رحلة #{{ $overflowTrip->id }}) وغير ظاهر للعملاء.
-                                <span class="block font-semibold mt-1">يتفعّل تلقائياً عند اكتمال الباص الأول، أو تفتحه
-                                    الحين بنفسك.</span>
-                            @endif
-                        </div>
-
-                        @if ($overflowActive)
-                            @unless ($overflowHasBookings)
-                                <button type="submit" form="overflow-close-form"
-                                    onclick="return confirm('إغلاق الباص الثاني وإرجاعه لوضع احتياطي؟')"
-                                    class="btn !py-2 !px-4 !text-xs bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shrink-0">
-                                    إغلاق الباص الثاني
-                                </button>
-                            @endunless
-                        @else
-                            <button type="submit" form="overflow-open-form"
-                                onclick="return confirm('فتح الباص الثاني الآن وإظهاره للعملاء؟ تأكد أنك حفظت تعديلات الرحلة أولاً.')"
-                                class="btn !py-2 !px-4 !text-xs bg-sky-600 hover:bg-sky-700 text-white shrink-0">
-                                🚌 فتح الباص الثاني الآن
-                            </button>
-                        @endif
-                    </div>
-                @elseif (!empty($trip->id))
-                    <p class="mt-4 text-[11px] font-bold text-slate-400">
-                        احفظ الرحلة أولاً ليتم تجهيز الباص الثاني، وبعدها يظهر هنا زر الفتح اليدوي.
-                    </p>
-                @endif
-
-                <div class="reveal" :class="{ open: overflowOn }">
-                    <div class="reveal-inner" :inert="!overflowOn">
-                        <div class="mt-6 pt-6 border-t border-sky-100/80 grid grid-cols-1 md:grid-cols-3 gap-5">
-
-                            <div>
-                                <label class="field-label">نوع الباص الثاني وعدد مقاعده <span
-                                        class="text-red-500">*</span></label>
-                                <select name="overflow_total_seats" :required="overflowOn"
-                                    :disabled="!overflowOn || {{ $overflowActive ? 'true' : 'false' }}"
-                                    @change="overflowSeats = $event.target.value"
-                                    class="field-input @error('overflow_total_seats') is-invalid @enderror">
-                                    <option value="" disabled :selected="!overflowSeats">اختر النوع وعدد المقاعد...
-                                    </option>
-                                    <template x-for="o in seatOptions" :key="'ov' + o.value">
-                                        <option :value="o.value" x-text="o.text"
-                                            :selected="o.value == overflowSeats"></option>
-                                    </template>
-                                </select>
-                                @error('overflow_total_seats')
-                                    <p class="field-error">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <div>
-                                <label class="field-label">الباص الثاني من الأسطول</label>
-                                <select name="overflow_vehicle_id"
-                                    :disabled="!overflowOn || {{ $overflowActive ? 'true' : 'false' }}"
-                                    class="field-input @error('overflow_vehicle_id') is-invalid @enderror">
-                                    <option value="">يحدد لاحقاً</option>
-                                    @foreach ($vehicles as $vehicle)
-                                        <option value="{{ $vehicle->id }}"
-                                            {{ old('overflow_vehicle_id', $overflowTrip->vehicle_id ?? null) == $vehicle->id ? 'selected' : '' }}>
-                                            {{ $vehicle->vehicle_model }} - ({{ $vehicle->plate_number }}) | سعة
-                                            {{ $vehicle->total_seats }} مقعد
-                                        </option>
-                                    @endforeach
-                                </select>
-                                @error('overflow_vehicle_id')
-                                    <p class="field-error">{{ $message }}</p>
-                                @enderror
-                            </div>
-
-                            <div>
-                                <label class="field-label">كابتن الباص الثاني</label>
-                                <select name="overflow_driver_id"
-                                    :disabled="!overflowOn || {{ $overflowActive ? 'true' : 'false' }}"
-                                    class="field-input @error('overflow_driver_id') is-invalid @enderror">
-                                    <option value="">يحدد لاحقاً</option>
-                                    @foreach ($drivers as $driver)
-                                        <option value="{{ $driver->id }}"
-                                            {{ old('overflow_driver_id', $overflowTrip->driver_id ?? null) == $driver->id ? 'selected' : '' }}>
-                                            {{ $driver->name }} - ({{ $driver->phone }})
-                                        </option>
-                                    @endforeach
-                                </select>
-                                @error('overflow_driver_id')
-                                    <p class="field-error">{{ $message }}</p>
-                                @enderror
-                            </div>
-                        </div>
-
-                        <p class="mt-4 text-[11px] text-slate-400 font-medium leading-relaxed">
-                            ℹ️ الباص الثاني يظهر عندك كمسودة "احتياطية" لين يتفعّل. غرف الفندق للباص الثاني تبدأ بعدد صفر
-                            (حتى ما تنباع نفس الغرف مرتين)، وتقدر تعدّلها بعد تفعيله.
-                        </p>
-                    </div>
-                </div>
-            </section>
-
-
-            {{-- ═════════════ (ح) الشروط والملاحظات ═════════════ --}}
-            <section class="card !p-6">
-                <label class="field-label">شروط الرحلة أو الملاحظات الإضافية</label>
-                <textarea name="notes" rows="8" placeholder="اكتب شروط إلغاء الحجز، أو متطلبات إضافية هنا..."
-                    class="field-input !rounded-[1.25rem] !p-5 font-medium leading-relaxed">{{ old('notes', $trip->notes ?? $defaultNotes) }}</textarea>
-            </section>
-
-
-            {{-- ═════════════ (ط) أزرار الحفظ (شريط ثابت أسفل الصفحة) ═════════════ --}}
-            <section class="sticky bottom-3 z-20">
-                <div
-                    class="flex flex-col sm:flex-row justify-end items-center gap-3 p-3 rounded-[1.5rem] bg-white/85 backdrop-blur border border-slate-200/70 shadow-lg shadow-slate-200/60">
-
-                    <button type="submit" name="action" value="draft"
-                        :class="submitting && 'opacity-60 pointer-events-none'"
-                        class="btn w-full sm:w-auto justify-center bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-sm">
-                        <span class="text-base">📁</span>
-                        <span>{{ $trip->exists ? 'تحديث وحفظ في المسودة' : 'حفظ كمسودة جديدة' }}</span>
-                    </button>
-
-                    <button type="submit" name="action" value="publish"
-                        :class="submitting && 'opacity-60 pointer-events-none'"
-                        class="btn w-full sm:w-auto justify-center !px-8 bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-100 hover:shadow-indigo-200">
-                        <span class="text-base" x-text="submitting ? '⏳' : '🚀'">🚀</span>
-                        <span>{{ $trip->exists ? 'تحديث ونشر الرحلة الآن' : 'نشر الرحلة للمسافرين فوراً' }}</span>
-                    </button>
-                </div>
-            </section>
-
-        </form>
-        @if (!empty($trip->id) && $overflowTrip)
-            <form id="overflow-open-form" method="POST" action="{{ route('agency.trips.overflow.open', $trip->id) }}"
-                hidden>@csrf</form>
-            <form id="overflow-close-form" method="POST"
-                action="{{ route('agency.trips.overflow.close', $trip->id) }}" hidden>@csrf</form>
-        @endif
-    </div>
-
-
-    {{-- ╔══════════════════════════════════════════════════════════════╗
-         ║  3) التنسيقات                                                 ║
-         ╚══════════════════════════════════════════════════════════════╝ --}}
-    <style type="text/tailwindcss">
-        @layer components {
-            .card {
-                @apply bg-white rounded-[2rem] border border-slate-100 shadow-sm p-6 sm:p-8;
-            }
-
-            .card-title {
-                @apply text-base font-black text-slate-800 flex items-center gap-3 mb-6;
-            }
-
-            .card-icon {
-                @apply w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0;
-            }
-
-            .field-label {
-                @apply block text-[11px] font-black text-slate-500 mb-2;
-            }
-
-            .field-error {
-                @apply text-red-500 text-xs mt-1.5 font-bold;
-            }
-
-            .field-input {
-                @apply w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-bold text-slate-800 placeholder:text-slate-400 placeholder:font-semibold outline-none transition-all duration-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10;
-            }
-
-            .field-input.is-invalid {
-                @apply border-red-500 focus:border-red-500 focus:ring-red-500/10;
-            }
-
-            .field-input[readonly] {
-                @apply bg-slate-100 text-slate-500 cursor-default focus:ring-0 focus:border-slate-200;
-            }
-
-            .btn {
-                @apply inline-flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-sm transition-all duration-200 active:scale-95 cursor-pointer;
-            }
-
-            .toggle-row {
-                @apply flex items-center justify-between gap-4 mt-6 pt-6 border-t border-slate-100;
-            }
-        }
-    </style>
-
-    <style>
-        /* ===== أزرار الاختيار (radio / checkbox) ===== */
-        .opt {
-            position: relative;
-            display: block;
-            cursor: pointer;
-            --c: #2563eb;
-        }
-
-        .opt.acc-indigo {
-            --c: #4f46e5;
-        }
-
-        .opt.acc-purple {
-            --c: #9333ea;
-        }
-
-        .opt-pill {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: .35rem;
-            min-height: 3rem;
-            padding: .5rem .75rem;
-            border-radius: .75rem;
-            border: 1px solid #e2e8f0;
-            background: #f8fafc;
-            color: #475569;
-            font-size: .75rem;
-            font-weight: 900;
-            text-align: center;
-            transition: all .25s cubic-bezier(.4, 0, .2, 1);
-        }
-
-        .opt-pill.sm {
-            min-height: 2.75rem;
-            font-size: 10px;
-            padding: .75rem;
-        }
-
-        .opt:hover .opt-pill {
-            border-color: color-mix(in srgb, var(--c) 45%, #e2e8f0);
-        }
-
-        .opt-input:checked+.opt-pill {
-            background: var(--c);
-            border-color: var(--c);
-            color: #fff;
-            box-shadow: 0 8px 18px -8px var(--c);
-        }
-
-        .opt-input:focus-visible+.opt-pill {
-            outline: 2px solid var(--c);
-            outline-offset: 2px;
-        }
-
-        /* ===== مفتاح التشغيل ===== */
-        .switch {
-            position: relative;
-            display: inline-flex;
-            flex-shrink: 0;
-            cursor: pointer;
-            --sw: #10b981;
-        }
-
-        .switch.acc-amber {
-            --sw: #f59e0b;
-        }
-
-        .switch-track {
-            position: relative;
-            width: 2.75rem;
-            height: 1.5rem;
-            border-radius: 9999px;
-            background: #e2e8f0;
-            transition: background .25s ease;
-        }
-
-        .switch-track::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            inset-inline-start: 2px;
-            width: 1.25rem;
-            height: 1.25rem;
-            border-radius: 9999px;
-            background: #fff;
-            box-shadow: 0 1px 3px rgba(15, 23, 42, .25);
-            transition: transform .3s cubic-bezier(.4, 0, .2, 1);
-        }
-
-        .switch input:checked+.switch-track {
-            background: var(--sw);
-        }
-
-        .switch input:checked+.switch-track::after {
-            transform: translateX(-1.25rem);
-        }
-
-        .switch input:focus-visible+.switch-track {
-            outline: 2px solid var(--sw);
-            outline-offset: 2px;
-        }
-
-        /* ===== الانزلاق السلس (نفس أسلوب القائمة الجانبية) ===== */
-        .reveal {
-            display: grid;
-            grid-template-rows: 0fr;
-            opacity: 0;
-            transition: grid-template-rows .35s cubic-bezier(.4, 0, .2, 1), opacity .3s ease;
-        }
-
-        .reveal.open {
-            grid-template-rows: 1fr;
-            opacity: 1;
-        }
-
-        .reveal-inner {
-            overflow: hidden;
-            min-height: 0;
-            padding: 3px;
-            margin: -3px;
-        }
-
-        /* ===== حركات x-transition ===== */
-        .pop-active {
-            transition: opacity .2s ease, transform .25s cubic-bezier(.4, 0, .2, 1);
-        }
-
-        .pop-from {
-            opacity: 0;
-            transform: translateY(-6px) scale(.97);
-        }
-
-        .pop-to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-        }
-
-        .view-active {
-            transition: opacity .25s ease, transform .25s ease;
-        }
-
-        .view-from {
-            opacity: 0;
-            transform: translateY(4px);
-        }
-
-        .view-to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        /* ===== ظهور الأقسام تباعاً (backwards: حتى لا يبقى transform يكسر القوائم المنسدلة) ===== */
-        @keyframes riseIn {
-            from {
-                opacity: 0;
-                transform: translateY(12px);
-            }
-        }
-
-        .rise {
-            animation: riseIn .5s cubic-bezier(.16, 1, .3, 1) backwards;
-        }
-
-        .stagger>section {
-            animation: riseIn .5s cubic-bezier(.16, 1, .3, 1) backwards;
-        }
-
-        .stagger>section:nth-of-type(2) {
-            animation-delay: .04s;
-        }
-
-        .stagger>section:nth-of-type(3) {
-            animation-delay: .08s;
-        }
-
-        .stagger>section:nth-of-type(4) {
-            animation-delay: .12s;
-        }
-
-        .stagger>section:nth-of-type(5) {
-            animation-delay: .16s;
-        }
-
-        .stagger>section:nth-of-type(6) {
-            animation-delay: .20s;
-        }
-
-        .stagger>section:nth-of-type(n+7) {
-            animation-delay: .24s;
-        }
-
-        /* ===== شريط التمرير ===== */
-        .soft-scroll::-webkit-scrollbar {
-            width: 5px;
-        }
-
-        .soft-scroll::-webkit-scrollbar-track {
-            background: #f1f5f9;
-            border-radius: 10px;
-        }
-
-        .soft-scroll::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 10px;
-        }
-
-        .soft-scroll::-webkit-scrollbar-thumb:hover {
-            background: #94a3b8;
-        }
-    </style>
-
-
-    {{-- ╔══════════════════════════════════════════════════════════════╗
-         ║  4) منطق Alpine.js                                            ║
-         ╚══════════════════════════════════════════════════════════════╝ --}}
-    <script>
-        const SAUDI_CITIES = @js($allSaudiCities);
-
-        const VEHICLE_OPTIONS = {
-            bus: [{
-                    value: '49',
-                    text: 'حافلة كبيرة (49 مقعد)'
-                },
-                {
-                    value: '30',
-                    text: 'حافلة متوسطة (30 مقعد)'
-                },
-                {
-                    value: '15',
-                    text: 'ميني باص / فان (15 مقعد)'
-                },
-                {
-                    value: '7',
-                    text: 'سيارة عائلية SUV (7 مقاعد)'
-                },
-                {
-                    value: '4',
-                    text: 'سيارة سيدان (4 مقاعد)'
-                },
-            ],
-            flight: [{
-                    value: '180',
-                    text: 'طائرة ركاب ضخمة (180 مقعد)'
-                },
-                {
-                    value: '120',
-                    text: 'طائرة تجارية متوسطة (120 مقعد)'
-                },
-                {
-                    value: '70',
-                    text: 'طائرة إقليمية (70 مقعد)'
-                },
-                {
-                    value: '12',
-                    text: 'طائرة خاصة VIP (12 مقعد)'
-                },
-                {
-                    value: '6',
-                    text: 'طائرة خاصة صغيرة (6 مقاعد)'
-                },
-            ],
-        };
-
-        // رقم اليوم (UTC) من قيمة datetime-local، لحساب الليالي بتواريخ التقويم
-        const dayIndex = (v) => {
-            if (!v) return null;
-            const [y, m, d] = v.slice(0, 10).split('-').map(Number);
-            return Date.UTC(y, m - 1, d) / 86400000;
-        };
-
-        // معرّف فريد للعناصر المتكررة
-        let uidCounter = 0;
-        const uid = () => ++uidCounter;
-
-        // يبني كائن x-transition لاستخدامه عبر x-bind
-        const makeFx = (p, both = true) => ({
-            'x-transition:enter': `${p}-active`,
-            'x-transition:enter-start': `${p}-from`,
-            'x-transition:enter-end': `${p}-to`,
-            ...(both && {
-                'x-transition:leave': `${p}-active`,
-                'x-transition:leave-start': `${p}-to`,
-                'x-transition:leave-end': `${p}-from`,
-            }),
-        });
-
-        document.addEventListener('alpine:init', () => {
-
-            // ───────────── النموذج الرئيسي ─────────────
-            Alpine.data('tripForm', (state) => ({
-                ...state,
-                submitting: false,
-                popFx: makeFx('pop'),
-                viewFx: makeFx('view'),
-
-                init() {
-                    // عند تغيير وسيلة النقل: نصفّر المقاعد إن لم تكن ضمن الخيارات الجديدة
-                    this.$watch('transport', () => {
-                        if (!this.seatOptions.some(o => o.value == this.seats)) this.seats = '';
-                        if (!this.seatOptions.some(o => o.value == this.overflowSeats)) this
-                            .overflowSeats = '';
-                    });
-                    // الذهاب فقط: نمسح تاريخ العودة
-                    this.$watch('tripType', (t) => {
-                        if (t !== 'round_trip') this.returnAt = '';
-                    });
-                },
-
-                get isRound() {
-                    return this.tripType === 'round_trip';
-                },
-
-
-                get isBus() {
-                    return this.transport === 'bus';
-                },
-                get overflowOn() {
-                    return this.isBus && this.overflowEnabled;
-                },
-
-                // عدد الليالي = فرق التواريخ، والأيام = الليالي + 1
-                get nights() {
-                    if (!this.isRound) return 0;
-                    const a = dayIndex(this.departureAt),
-                        b = dayIndex(this.returnAt);
-                    return (a === null || b === null || b < a) ? 0 : b - a;
-                },
-                get days() {
-                    return this.nights + 1;
-                },
-
-                get invalidReturn() {
-                    return this.isRound && this.departureAt && this.returnAt && this.returnAt <=
-                        this.departureAt;
-                },
-
-                get seatOptions() {
-                    return VEHICLE_OPTIONS[this.transport] || VEHICLE_OPTIONS.bus;
-                },
-                get mealCount() {
-                    return [this.hasBreakfast, this.hasLunch, this.hasDinner].filter(Boolean)
-                        .length;
-                },
-
-                // قفل مزدوج للإرسال (setTimeout حتى لا يضيع اسم الزر المضغوط)
-                lock() {
-                    setTimeout(() => this.submitting = true, 0);
-                },
-            }));
-
-            // ───────────── قائمة المدن ─────────────
-            Alpine.data('citySelect', (selected) => ({
-                selected,
-                open: false,
-                search: '',
-                cities: SAUDI_CITIES,
-                get filtered() {
-                    const q = this.search.trim();
-                    return q ? this.cities.filter(c => c.includes(q)) : this.cities;
-                },
-                toggle() {
-                    this.open = !this.open;
-                    if (this.open) this.$nextTick(() => this.$refs.q?.focus());
-                },
-                pick(city) {
-                    this.selected = city;
-                    this.open = false;
-                    this.search = '';
-                },
-            }));
-
-            // ───────────── صورة الغلاف ─────────────
-            Alpine.data('coverImage', (url) => ({
-                preview: url,
-                changed: false,
-                pick(e) {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    this.preview = URL.createObjectURL(file);
-                    this.changed = true;
-                },
-            }));
-
-            // ───────────── المميزات المخصصة ─────────────
-            Alpine.data('featuresPicker', (items) => ({
-                items,
-                draft: '',
-                add() {
-                    const v = this.draft.trim();
-                    if (v && !this.items.includes(v)) this.items.push(v);
-                    this.draft = '';
-                },
-            }));
-
-            // ───────────── الخدمات الإضافية ─────────────
-            Alpine.data('extraServices', (items) => ({
-                services: items.map(s => ({
-                    uid: uid(),
-                    name: s.name ?? '',
-                    price: Number(s.price) || 0,
-                    description: s.description ?? '',
-                })),
-                draft: {
-                    name: '',
-                    price: '',
-                    description: ''
-                },
-                error: '',
-                add() {
-                    const name = this.draft.name.trim();
-                    if (!name) {
-                        this.error = 'يرجى إدخال اسم الخدمة';
-                        return;
+            $totalRoomsCost = 0;
+            foreach ($roomCounts as $rType => $passengerCount) {
+                $cap = $capacities[$rType] ?? 1;
+                $roomsNeeded = (int) ceil($passengerCount / $cap);
+
+                $rPrice = 0;
+                if (is_array($tripRoomOptions)) {
+                    foreach ($tripRoomOptions as $key => $details) {
+                        if (strtolower(trim($key)) === $rType) {
+                            $rPrice = (float)($details['price'] ?? 0);
+                            break;
+                        }
                     }
-                    this.error = '';
-                    this.services.push({
-                        uid: uid(),
-                        name,
-                        price: this.draft.price !== '' ? (parseFloat(this.draft.price) || 0) :
-                            0,
-                        description: this.draft.description.trim(),
-                    });
-                    this.draft = {
-                        name: '',
-                        price: '',
-                        description: ''
-                    };
-                },
-                remove(i) {
-                    this.services.splice(i, 1);
-                },
-            }));
+                }
+                $totalRoomsCost += ($roomsNeeded * $rPrice);
+            }
 
-            // ───────────── باقات وجبات كل نوع غرفة ─────────────
-            Alpine.data('roomPackages', (type, items) => {
-                const on = (v) => !!Number(v);
-                const make = (p = {}) => ({
-                    uid: uid(),
-                    name: p.name ?? '',
-                    price: p.price ?? 0,
-                    meals: {
-                        breakfast: on(p.meals?.breakfast),
-                        lunch: on(p.meals?.lunch),
-                        dinner: on(p.meals?.dinner)
-                    },
-                });
-                return {
-                    packages: (items || []).map(make),
-                    add() {
-                        this.packages.push(make());
-                    },
-                    remove(i) {
-                        this.packages.splice(i, 1);
-                    },
-                    // اسم الحقل: room_options[type][packages][i][a][b]
-                    n(i, ...parts) {
-                        return `room_options[${type}][packages][${i}]` + parts.map(p => `[${p}]`).join('');
-                    },
-                };
-            });
+            $discount = (float)($request->cash_paid ?? 0);
+            $calculatedTotal = $totalRoomsCost + $totalPackageAndMealCost;
+            $newTotalAmount = max(0, $calculatedTotal - $discount);
 
-            // ───────────── الحسابات البنكية ─────────────
-            Alpine.data('bankAccounts', (items) => {
-                const make = (r = {}) => ({
-                    id: uid(),
-                    bank_name: r.bank_name ?? '',
-                    iban: r.iban ?? '',
-                    account_number: r.account_number ?? '',
-                    qr_code: r.qr_code ?? '',
-                    preview: r.qr_url ?? '',
-                });
-                return {
-                    rows: items.map(make),
-                    add() {
-                        this.rows.push(make());
-                    },
-                    remove(i) {
-                        if (this.rows.length > 1) this.rows.splice(i, 1);
-                    },
-                    pick(row, e) {
-                        const file = e.target.files?.[0];
-                        if (file) row.preview = URL.createObjectURL(file);
-                    },
-                };
-            });
+            if (!empty($updatedRoomTypes)) {
+                $booking->room_type = implode(', ', array_unique($updatedRoomTypes));
+            }
+
+            $booking->total_amount = $newTotalAmount;
+            $booking->save();
+
+            $amountDifference = $newTotalAmount - $oldTotalAmount;
+
+            $logDescription = "تم تحديث الحجز رقم #{$booking->id} | " .
+                "العميل: [{$oldCustomerName} -> {$booking->customer_name}] | " .
+                "حالة الحجز: [{$oldStatus} -> {$booking->status}] | " .
+                "حالة الدفع: [{$oldPaymentStatus} -> {$booking->payment_status}] | " .
+                "المبلغ الإجمالي: [{$oldTotalAmount} -> {$newTotalAmount}] (الفرق: {$amountDifference})";
+
+            if (!empty($roomChangesDetails)) {
+                $logDescription .= " | تغييرات الغرف: (" . implode('، ', $roomChangesDetails) . ")";
+            }
+
+            $agencyId = $booking->agency_id ?? $trip?->agency_id ?? $this->getAgencyId();
+
+            AuditLog::create([
+                'agency_id'      => $agencyId,
+                'trip_id'        => $booking->trip_id,
+                'action_type'    => 'update',
+                'category'       => 'booking',
+                'amount_changed' => $amountDifference,
+                'seats_changed'  => 0,
+                'description'    => $logDescription,
+                'operator_name'  => $this->getOperatorName(),
+            ]);
+
+            app(\App\Services\BookingChangeLogger::class)->log(
+                $booking,
+                'booking_updated',
+                [
+                    'customer_name' => $oldCustomerName,
+                    'status' => $oldStatus,
+                    'payment_status' => $oldPaymentStatus,
+                    'total_amount' => $oldTotalAmount,
+                ],
+                [
+                    'customer_name' => $booking->customer_name,
+                    'status' => $booking->status,
+                    'payment_status' => $booking->payment_status,
+                    'total_amount' => $newTotalAmount,
+                    'room_changes' => $roomChangesDetails,
+                ],
+                ['source' => 'agency']
+            );
         });
-    </script>
 
-@endsection
+        return redirect()->back()->with('success', 'تم تحديث الحجز بنجاح.');
+    }
+
+    public function updateBookingStatus(Request $request, $id, \App\Services\BookingSettlement $settlement)
+    {
+        $request->validate([
+            'status'         => 'required|in:pending,confirmed,cancelled,completed',
+            'payment_status' => 'required|in:unpaid,paid,failed,refunded',
+        ]);
+
+        $agencyId = $this->getAgencyId();
+        $booking = Booking::where('id', $id)
+            ->whereHas('trip', function ($query) use ($agencyId) {
+                $query->where('agency_id', $agencyId);
+            })
+            ->firstOrFail();
+
+        $oldPaymentStatus = $booking->payment_status;
+        $newPaymentStatus = $request->payment_status;
+
+        DB::transaction(function () use ($booking, $request, $settlement, $oldPaymentStatus, $newPaymentStatus) {
+            $booking->update([
+                'status'         => $request->status,
+                'payment_status' => $newPaymentStatus,
+            ]);
+
+            if ($newPaymentStatus === 'paid' && $oldPaymentStatus !== 'paid' && !$booking->booked_by_agency) {
+                // حجز عميل تأكد دفعه (تحويل بنكي): تسوية العمولة وإضافة المستحق للمحفظة
+                $settlement->settle($booking);
+            } elseif ($oldPaymentStatus === 'paid' && in_array($newPaymentStatus, ['unpaid', 'failed', 'refunded'], true)) {
+                // تراجع عن الدفع أو استرداد: عكس الحركة والعمولة
+                $settlement->reverse($booking);
+            }
+        });
+
+        $desc = "تحديث حالة الحجز رقم (#{$booking->id}) إلى [{$request->status}] وحالة الدفع إلى [{$newPaymentStatus}].";
+        $actionType = 'update';
+        $category = 'booking';
+        $amountChanged = 0;
+
+        if ($newPaymentStatus === 'refunded') {
+            $actionType = 'decrease';
+            $category = 'money';
+            $amountChanged = -$booking->total_amount;
+            $desc = "تم رد وإرجاع المبلغ المالي بالكامل بقيمة ({$booking->total_amount}) للحجز رقم (#{$booking->id}) نظير إلغاء أو تسوية الطلب.";
+        } elseif ($newPaymentStatus === 'paid') {
+            $actionType = 'increase';
+            $category = 'money';
+            $amountChanged = $booking->total_amount;
+        }
+
+        AuditLog::create([
+            'agency_id'      => $agencyId,
+            'trip_id'        => $booking->trip_id,
+            'action_type'    => $actionType,
+            'category'       => $category,
+            'amount_changed' => $amountChanged ?: 0,
+            'seats_changed'  => 0,
+            'description'    => $desc,
+            'operator_name'  => $this->getOperatorName(),
+        ]);
+
+        return redirect()->back()->with('success', 'تم تحديث حالة الحجز بنجاح! 🎉');
+    }
+
+    public function editBooking($id)
+    {
+        $agencyId = $this->getAgencyId();
+
+        $booking = Booking::where('id', $id)
+            ->whereHas('trip', function ($query) use ($agencyId) {
+                $query->where('agency_id', $agencyId);
+            })
+            ->with(['trip', 'bookingSeats'])
+            ->firstOrFail();
+
+        return view('agency.bookings.edit', compact('booking'));
+    }
+
+    public function cancel(Request $request, $id)
+    {
+        $agencyId = $this->getAgencyId();
+
+        // 1. البحث عن الحجز المراد إلغاؤه
+        $booking = Booking::where('id', $id)
+            ->where(function ($query) use ($agencyId) {
+                $query->where('agency_id', $agencyId)
+                    ->orWhereHas('trip', function ($q) use ($agencyId) {
+                        $q->where('agency_id', $agencyId);
+                    });
+            })
+            ->with(['seats', 'bookingSeats', 'trip'])
+            ->first();
+
+        if (!$booking) {
+            return redirect()->back()->with('error', 'عذراً، لم يتم العثور على الحجز أو لا تملك صلاحية إلغائه.');
+        }
+
+        if ($booking->status === 'cancelled') {
+            return redirect()->back()->with('error', 'هذا الحجز ملغى بالفعل مسبقاً.');
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $trip = $booking->trip;
+            $seatsCollection = $booking->seats ?? $booking->bookingSeats;
+            $seatsCount = $seatsCollection ? $seatsCollection->count() : 0;
+
+            $originalAmount = floatval($booking->total_amount ?? $booking->total_price ?? $booking->amount ?? 0);
+            $deductedAmount = -abs($originalAmount);
+            $moyasarPaymentId = $booking->moyasar_payment_id ?? $booking->payment_id ?? null;
+
+            $paymentStatus = 'cancelled';
+            $refundLogNote = '';
+
+            // 2. إلغاء المعاملات السابقة المرتبطة بالحجز أولاً
+            app(\App\Services\BookingSettlement::class)->reverse($booking);
+
+            // 3. معالجة إعادة المبلغ حسب طريقة الدفع
+            if ($booking->payment_status === 'paid' && $originalAmount > 0) {
+                if (!empty($moyasarPaymentId)) {
+                    $refundResult = $this->refundMoyasarPayment($moyasarPaymentId, $originalAmount);
+                    if ($refundResult['success']) {
+                        $paymentStatus = 'refunded';
+                        $refundLogNote = " وتم استرداد مبلغ ({$originalAmount}) ريال للبطاقة عبر ميسر.";
+                    } else {
+                        $paymentStatus = 'refund_failed';
+                        $refundLogNote = " وتأجل الإرجاع التلقائي لتعثره: " . ($refundResult['message'] ?? '');
+                    }
+                } elseif ($booking->payment_method === 'balance') {
+                    // نرجع بالضبط المبلغ اللي انخصم فعلاً من الرصيد وقت الحجز
+                    $debited = abs((float) \App\Models\AgencyTransaction::where('booking_id', $booking->id)
+                        ->where('type', 'booking_debit')
+                        ->sum('amount'));
+
+                    if ($debited > 0) {
+                        \App\Models\AgencyTransaction::create([
+                            'agency_id'   => $booking->agency_id ?? $agencyId,
+                            'booking_id'  => $booking->id,
+                            'type'        => 'refund',
+                            'amount'      => $debited,
+                            'status'      => 'available',
+                            'description' => "إعادة مبلغ الحجز الملغى رقم (#{$booking->id}) لرصيد الوكالة",
+                        ]);
+
+                        $paymentStatus = 'refunded';
+                        $refundLogNote = " وتمت إعادة مبلغ ({$debited}) ريال إلى رصيد الوكالة المتاح.";
+                    }
+                } elseif ($booking->payment_method === 'bank') {
+                    $paymentStatus = 'refund_failed';
+                    $refundLogNote = " والمبلغ ({$originalAmount}) ريال يحتاج استرداداً يدوياً للعميل.";
+                }
+            }
+            // 3.5 استرداد الفواتير الإضافية (دفعات مستقلة في ميسر)
+            $extraResult = app(\App\Services\ExtraChargeRefunder::class)->refundAll($booking);
+            $refundLogNote .= $extraResult['note'];
+
+            // 4. إعادة الغرف والمقاعد للمخزون
+            if ($trip) {
+                $roomOptions = is_array($trip->room_options)
+                    ? $trip->room_options
+                    : (json_decode($trip->room_options, true) ?? []);
+
+                $bookingRoomType = $booking->room_type;
+                $roomsToRestore = $booking->room_count ?? $booking->rooms_count ?? 1;
+
+                if (!empty($bookingRoomType) && isset($roomOptions[$bookingRoomType])) {
+                    $roomOptions[$bookingRoomType]['count'] += $roomsToRestore;
+                }
+
+                $trip->room_options = $roomOptions;
+
+                if ($seatsCount > 0) {
+                    $trip->available_seats += $seatsCount;
+                }
+
+                $trip->save();
+            }
+
+            app(\App\Services\LoyaltyService::class)->refund($booking, $this->getOperatorName());
+            app(\App\Services\BookingChangeLogger::class)->log(
+                $booking,
+                'booking_cancelled',
+                ['status' => $booking->status, 'payment_status' => $booking->payment_status],
+                ['status' => 'cancelled', 'payment_status' => $paymentStatus],
+                ['force' => true, 'source' => 'agency']
+            );
+
+            // 5. تحديث حالة الحجز وتصفير القيم
+            $booking->update([
+                'status'              => 'cancelled',
+                'payment_status'      => $paymentStatus,
+                'platform_commission' => 0,
+                'agency_amount'       => 0,
+            ]);
+
+            // 6. حذف المقاعد المحجوزة
+            if (method_exists($booking, 'seats') && $booking->seats()) {
+                $booking->seats()->delete();
+            } elseif (method_exists($booking, 'bookingSeats') && $booking->bookingSeats()) {
+                $booking->bookingSeats()->delete();
+            }
+
+            // 7. تسجيل الحدث في السجلات
+            AuditLog::create([
+                'agency_id'      => $agencyId,
+                'trip_id'        => $booking->trip_id,
+                'action_type'    => 'cancel_booking',
+                'category'       => 'booking',
+                'amount_changed' => $deductedAmount,
+                'seats_changed'  => -$seatsCount,
+                'description'    => "تم إلغاء الحجز رقم (#{$booking->id}) بواسطة الوكالة{$refundLogNote}.",
+                'operator_name'  => $this->getOperatorName(),
+            ]);
+
+            DB::commit();
+
+            $successMessage = 'تم إلغاء الحجز وإعادة الرصيد والمقاعد بنجاح.' . $refundLogNote;
+
+            if ($request->expectsJson()) {
+                return response()->json(['success' => true, 'message' => $successMessage], 200, [], JSON_UNESCAPED_UNICODE);
+            }
+
+            return redirect()->back()->with('success', $successMessage);
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            if ($request->expectsJson()) {
+                return response()->json(['success' => false, 'message' => 'حدث خطأ أثناء إلغاء الحجز: ' . $e->getMessage()], 500, [], JSON_UNESCAPED_UNICODE);
+            }
+
+            return redirect()->back()->with('error', 'حدث خطأ أثناء إلغاء الحجز: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * دالة مساعدة للاسترداد التلقائي عبر API ميسر
+     */
+    private function refundMoyasarPayment($paymentId, $amountInRiyal)
+    {
+        try {
+            $amountInHalalas = (int) round($amountInRiyal * 100);
+
+            $response = \Illuminate\Support\Facades\Http::withBasicAuth(config('services.moyasar.secret_key'), '')
+                ->post("https://api.moyasar.com/v1/payments/{$paymentId}/refund", [
+                    'amount' => $amountInHalalas,
+                ]);
+
+            if ($response->successful()) {
+                return [
+                    'success' => true,
+                    'data'    => $response->json(),
+                ];
+            }
+
+            \Illuminate\Support\Facades\Log::error('Moyasar Refund Error: ' . $response->body());
+            return [
+                'success' => false,
+                'message' => $response->json('message') ?? 'فشلت عملية الاسترداد من ميسر',
+            ];
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Moyasar Exception: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    public function confirmEdit($id)
+    {
+        $booking = Booking::findOrFail($id);
+
+        $booking->update([
+            'edit_notes' => 'done',
+        ]);
+
+        return back()->with('success', 'تم تأكيد وإغلاق طلب التعديل بنجاح.');
+    }
+
+    public function storeAgencyBooking(Request $request)
+    {
+        if ($request->has('seats') && !$request->has('selected_seats')) {
+            $request->merge(['selected_seats' => $request->input('seats')]);
+        } elseif ($request->has('selected_seats') && !$request->has('seats')) {
+            $request->merge(['seats' => $request->input('selected_seats')]);
+        }
+
+        if (!$request->has('room_quantities') && $request->has('room_quantities_json')) {
+            $request->merge(['room_quantities' => $request->input('room_quantities_json')]);
+        }
+        if (!$request->has('room_assignments') && $request->has('room_assignments_json')) {
+            $request->merge(['room_assignments' => $request->input('room_assignments_json')]);
+        }
+        if (!$request->has('passenger_meals') && $request->has('passenger_meals_json')) {
+            $request->merge(['passenger_meals' => $request->input('passenger_meals_json')]);
+        }
+
+        $request->validate([
+            'trip_id'           => 'required|exists:trips,id',
+            'room_quantities'   => 'nullable',
+            'room_assignments'  => 'nullable',
+            'selected_seats'    => 'required|string',
+            'passenger_names'   => 'required|string',
+            'passenger_ids'     => 'required|string',
+            'passenger_genders' => 'required|string',
+            'passenger_meals'   => 'nullable',
+            'customer_phone'    => 'required|string',
+            'customer_email'    => 'nullable|email',
+            'payment_method'    => 'nullable|in:balance,card,bank,cash,pos',
+            'card_name'         => 'nullable|required_if:payment_method,card|string|max:255',
+            'bank_receipt'      => 'nullable|required_if:payment_method,bank|image|mimes:jpeg,png,jpg,webp|max:4096',
+            'is_locked'         => 'nullable|boolean',
+        ], [
+            'bank_receipt.required_if' => 'يرجى إرفاق صورة إيصال التحويل البنكي لاعتماد الحجز.',
+            'card_name.required_if'    => 'يرجى كتابة اسم صاحب البطاقة البنكية.',
+            'customer_phone.required'  => 'رقم هاتف العميل أساسي للتواصل وإرسال التذاكر.',
+        ]);
+
+        $parseIncomingData = function ($source) {
+            if (empty($source)) return [];
+            if (is_array($source)) return $source;
+            $decoded = json_decode($source, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return $decoded;
+            }
+            return collect(explode(',', $source))
+                ->map(fn($item) => trim($item))
+                ->filter(fn($val) => $val !== '')
+                ->values()
+                ->all();
+        };
+
+        $seatsArray            = $parseIncomingData($request->input('selected_seats'));
+        $passengerNamesArray   = $parseIncomingData($request->input('passenger_names'));
+        $passengerIdsArray     = array_filter($parseIncomingData($request->input('passenger_ids')));
+        $passengerGendersArray = $parseIncomingData($request->input('passenger_genders'));
+
+        if (count($seatsArray) !== count($passengerGendersArray) || count($seatsArray) !== count($passengerNamesArray)) {
+            return redirect()->back()->withInput()->with('error', 'عذراً، حدث خطأ في مطابقة بيانات الركاب مع المقاعد المختارة بالجدول الهندسي.');
+        }
+
+        $agentId = $this->getAgencyId();
+
+        $roomQuantities  = is_array($request->input('room_quantities')) ? $request->input('room_quantities') : (json_decode($request->input('room_quantities'), true) ?? []);
+        $roomAssignments = is_array($request->input('room_assignments')) ? $request->input('room_assignments') : (json_decode($request->input('room_assignments'), true) ?? []);
+        $passengerMeals  = is_array($request->input('passenger_meals')) ? $request->input('passenger_meals') : (json_decode($request->input('passenger_meals'), true) ?? []);
+
+        $roomCount       = array_sum($roomQuantities);
+        $chosenRoomTypes = array_keys(array_filter($roomQuantities, fn($qty) => $qty > 0));
+        $finalRoomType   = !empty($chosenRoomTypes) ? implode(', ', $chosenRoomTypes) : 'shared';
+
+        try {
+            $booking = DB::transaction(function () use ($request, $seatsArray, $passengerNamesArray, $passengerIdsArray, $passengerGendersArray, $agentId, $roomCount, $roomQuantities, $finalRoomType, $roomAssignments, $passengerMeals) {
+
+                $trip = Trip::lockForUpdate()->findOrFail($request->trip_id);
+
+                if (!empty($passengerIdsArray)) {
+                    $isAnyPassengerAlreadyRegistered = BookingSeat::where('trip_id', $trip->id)
+                        ->whereIn('passenger_national_id', $passengerIdsArray)
+                        ->exists();
+
+                    if ($isAnyPassengerAlreadyRegistered) {
+                        throw new \Exception('🛑 تنبيه: أحد المسافرين مسجل بالفعل في كشوفات هذه الرحلة مسبقاً.');
+                    }
+                }
+
+                if (count($seatsArray) > $trip->available_seats) {
+                    throw new \Exception('عذراً، عدد المقاعد المطلوبة أكبر من المقاعد المتاحة بالحافلة حالياً.');
+                }
+
+                $alreadyBooked = BookingSeat::where('trip_id', $trip->id)
+                    ->whereIn('seat_number', $seatsArray)
+                    ->exists();
+
+                if ($alreadyBooked) {
+                    throw new \Exception('المقاعد المحددة تم حجزها للتو من نافذة أخرى. يرجى تحديث المخطط.');
+                }
+
+                $roomOptions = is_array($trip->room_options) ? $trip->room_options : (json_decode($trip->room_options, true) ?: []);
+                $mealOptions = is_array($trip->meal_options) ? $trip->meal_options : (json_decode($trip->meal_options, true) ?: []);
+
+                foreach ($roomQuantities as $type => $qty) {
+                    $qty = intval($qty);
+                    if ($qty > 0) {
+                        $availableCount = isset($roomOptions[$type]['count']) ? intval($roomOptions[$type]['count']) : 0;
+                        if ($qty > $availableCount) {
+                            throw new \Exception("عذراً، الغرف من النوع المختار لم تعد كافية بالمخزون الحالي.");
+                        }
+                        // الخصم الصحيح من مخزون الغرف المتاحة
+                        $roomOptions[$type]['count'] = $availableCount - $qty;
+                    }
+                }
+
+                $room_prices = [
+                    'single' => floatval($roomOptions['single']['price'] ?? ($trip->price_single ?? 0)),
+                    'double' => floatval($roomOptions['double']['price'] ?? ($trip->price_double ?? 0)),
+                    'triple' => floatval($roomOptions['triple']['price'] ?? ($trip->price_triple ?? 0)),
+                    'quad'   => floatval($roomOptions['quad']['price']   ?? ($trip->price_quad   ?? 0)),
+                ];
+
+                $totalRoomCost = 0;
+                foreach ($roomQuantities as $type => $qty) {
+                    $totalRoomCost += (intval($qty) * ($room_prices[$type] ?? 0));
+                }
+
+                $seatBasePrice  = floatval($trip->price ?? 0);
+                $totalSeatsCost = 0;
+                $roomCapacities = ['single' => 1, 'double' => 2, 'triple' => 3, 'quad' => 4];
+
+                $availableFreeSlots = [];
+                foreach ($roomQuantities as $type => $qty) {
+                    if ($qty > 0) {
+                        $availableFreeSlots[$type] = intval($qty) * ($roomCapacities[$type] ?? 0);
+                    }
+                }
+
+                foreach ($seatsArray as $seatNum) {
+                    $assignment = $roomAssignments[$seatNum] ?? 'shared';
+                    if ($assignment === 'shared') {
+                        $totalSeatsCost += $seatBasePrice;
+                    } else {
+                        $roomType = explode('_', $assignment)[0];
+                        if (isset($availableFreeSlots[$roomType]) && $availableFreeSlots[$roomType] > 0) {
+                            $availableFreeSlots[$roomType]--;
+                        } else {
+                            $totalSeatsCost += $seatBasePrice;
+                        }
+                    }
+                }
+
+                $defaultMealPrices = [
+                    'breakfast' => (!empty($mealOptions['individual']['breakfast']['active'])) ? floatval($mealOptions['individual']['breakfast']['price'] ?? 0) : 0,
+                    'lunch'     => (!empty($mealOptions['individual']['lunch']['active'])) ? floatval($mealOptions['individual']['lunch']['price'] ?? 0) : 0,
+                    'dinner'    => (!empty($mealOptions['individual']['dinner']['active'])) ? floatval($mealOptions['individual']['dinner']['price'] ?? 0) : 0,
+                ];
+
+                $totalMealsCost    = 0;
+                $totalPackagesCost = 0;
+                $seatMealsDetails  = [];
+
+                foreach ($seatsArray as $seatNum) {
+                    $assignment  = $roomAssignments[$seatNum] ?? 'shared';
+                    $roomType    = $assignment !== 'shared' ? explode('_', $assignment)[0] : 'shared';
+
+                    $roomPackage = null;
+                    if ($roomType !== 'shared' && isset($roomOptions[$roomType]['packages'])) {
+                        $packagesList = $roomOptions[$roomType]['packages'];
+                        $roomPackage  = $packagesList[0] ?? null;
+                    }
+
+                    $hasBf = !empty($passengerMeals[$seatNum]['breakfast']) || ($roomPackage && !empty($roomPackage['meals']['breakfast']));
+                    $hasLn = !empty($passengerMeals[$seatNum]['lunch']) || ($roomPackage && !empty($roomPackage['meals']['lunch']));
+                    $hasDn = !empty($passengerMeals[$seatNum]['dinner']) || ($roomPackage && !empty($roomPackage['meals']['dinner']));
+
+                    $calculatedBf = $hasBf ? (($roomPackage && !empty($roomPackage['meals']['breakfast'])) ? 0 : $defaultMealPrices['breakfast']) : 0;
+                    $calculatedLn = $hasLn ? (($roomPackage && !empty($roomPackage['meals']['lunch'])) ? 0 : $defaultMealPrices['lunch']) : 0;
+                    $calculatedDn = $hasDn ? (($roomPackage && !empty($roomPackage['meals']['dinner'])) ? 0 : $defaultMealPrices['dinner']) : 0;
+
+                    $totalMealsCost += ($calculatedBf + $calculatedLn + $calculatedDn);
+
+                    $packagePrice = 0;
+                    if ($roomPackage) {
+                        $packagePrice = floatval($roomPackage['price'] ?? ($roomPackage['package_price'] ?? 0));
+                        $totalPackagesCost += $packagePrice;
+                    }
+
+                    $packageName = $passengerMeals[$seatNum]['package_name'] ?? null;
+                    if (!$packageName) {
+                        if ($roomPackage && !empty($roomPackage['name'])) {
+                            $packageName = $roomPackage['name'];
+                        } elseif ($hasBf || $hasLn || $hasDn) {
+                            $packageName = 'وجبات اختيارية';
+                        } else {
+                            $packageName = 'الباقة الأساسية';
+                        }
+                    }
+
+                    $seatMealsDetails[$seatNum] = [
+                        'bf'            => $calculatedBf,
+                        'ln'            => $calculatedLn,
+                        'dn'            => $calculatedDn,
+                        'hasBf'         => $hasBf ? 1 : 0,
+                        'hasLn'         => $hasLn ? 1 : 0,
+                        'hasDn'         => $hasDn ? 1 : 0,
+                        'package_name'  => $packageName,
+                        'package_price' => $packagePrice
+                    ];
+                }
+
+                $totalAmount = $totalRoomCost + $totalSeatsCost + $totalMealsCost + $totalPackagesCost;
+                $isLocked = $request->boolean('is_locked', false);
+
+                if ($isLocked) {
+                    $bookingStatus = 'locked';
+                    $paymentStatus = 'unpaid';
+                } else {
+                    $isDirectPayment = in_array($request->payment_method, ['balance', 'card', 'cash', 'pos']);
+                    $bookingStatus   = $isDirectPayment ? 'confirmed' : 'pending';
+                    $paymentStatus   = $isDirectPayment ? 'paid' : 'pending';
+                }
+
+                $leadPassengerName = $passengerNamesArray[0] ?? 'عميل محجوز بواسطة الوكالة';
+                $leadPassengerId   = $passengerIdsArray[0] ?? null;
+
+                $booking = Booking::create([
+                    'agency_id'            => $agentId,
+                    'user_id'              => null,
+                    'trip_id'              => $trip->id,
+                    'customer_name'        => $leadPassengerName,
+                    'customer_email'       => $request->input('customer_email') ?? 'agency-guest@abur.com',
+                    'customer_phone'       => $request->input('customer_phone'),
+                    'customer_national_id' => $leadPassengerId,
+                    'room_type'            => $finalRoomType,
+                    'room_count'           => $roomCount,
+                    'payment_method'       => $request->payment_method,
+                    'card_name'            => ($request->payment_method === 'card') ? $request->input('card_name') : null,
+                    'status'               => $bookingStatus,
+                    'payment_status'       => $paymentStatus,
+                    'total_amount'         => $totalAmount,
+                    'booked_by_agency'     => true,
+                    'is_locked'            => $isLocked,
+                    'room_quantities'      => is_array($roomQuantities) ? json_encode($roomQuantities, JSON_UNESCAPED_UNICODE) : $roomQuantities,
+                    'room_assignments'     => is_array($roomAssignments) ? json_encode($roomAssignments, JSON_UNESCAPED_UNICODE) : $roomAssignments,
+                    'passenger_meals'      => is_array($passengerMeals) ? json_encode($passengerMeals, JSON_UNESCAPED_UNICODE) : $passengerMeals,
+                ]);
+
+                $agency = Agency::lockForUpdate()->find($agentId);
+
+                // التحقق والخصم في حال كانت طريقة الدفع عن طريق المحفظة (balance)
+                if ($request->payment_method === 'balance' && !$isLocked && $agency) {
+                    // 1. التحقق من أن الرصيد المتاح كافٍ لإتمام العملية
+                    if ($agency->available_balance < $totalAmount) {
+                        throw new \Exception('عذراً، الرصيد المتاح في المحفظة غير كافٍ لإتمام الحجز. الرصيد المتاح: ' . number_format($agency->available_balance, 2) . ' ر.س');
+                    }
+
+                    // 2. حساب عمولة الوكالة بناءً على نظام العمولة الجديد (لكل مسافر + الحدود)
+                    $passengersCount = count($seatsArray);
+                    $calculatedCommission = $agency->calculateBookingCommission($passengersCount);
+
+                    // 3. تسجيل عملية الخصم بقيمة سالبة
+                    $agency->transactions()->create([
+                        'booking_id'  => $booking->id,
+                        'type'        => 'booking_debit',
+                        'amount'      => -$totalAmount, // قيمة سالبة للخصم من المحفظة
+                        'description' => "خصم قيمة حجز من رصيد المحفظة - رحلة: ({$trip->title}) - حجز #{$booking->id} (عدد المسافرين: {$passengersCount})",
+                        'status'      => 'completed',
+                    ]);
+                }
+
+                if ($request->hasFile('bank_receipt') && $request->payment_method === 'bank' && !$isLocked) {
+                    $path = $request->file('bank_receipt')->store('bank_receipts', 'public');
+                    $booking->update(['bank_receipt' => $path]);
+                }
+
+                foreach ($seatsArray as $index => $seatNum) {
+                    $pName   = $passengerNamesArray[$index] ?? $leadPassengerName;
+                    $pId     = $passengerIdsArray[$index] ?? $leadPassengerId;
+                    $pGender = $passengerGendersArray[$index] ?? 'male';
+                    $rType   = $roomAssignments[$seatNum] ?? 'shared';
+                    $md      = $seatMealsDetails[$seatNum];
+
+                    $bookedSeat = $booking->bookingSeats()->create([
+                        'trip_id'               => $trip->id,
+                        'seat_number'           => $seatNum,
+                        'passenger_name'        => $pName,
+                        'gender'                => $pGender,
+                        'passenger_national_id' => $pId,
+                        'room_type'             => $rType,
+                        'with_breakfast'        => $md['hasBf'],
+                        'with_lunch'            => $md['hasLn'],
+                        'with_dinner'           => $md['hasDn'],
+                        'breakfast_price'       => $md['bf'],
+                        'lunch_price'           => $md['ln'],
+                        'dinner_price'          => $md['dn'],
+                        'trip_room_id'          => null,
+                        'meal_options'          => [
+                            'package_name'  => $md['package_name'],
+                            'package_price' => $md['package_price']
+                        ],
+                    ]);
+
+                    $qrPayload = [
+                        'ticket_no'  => 'TKT-' . $bookedSeat->id,
+                        'booking_no' => 'BK-' . $booking->id,
+                        'trip'       => $trip->title ?? $trip->id,
+                        'seat'       => $seatNum,
+                        'passenger'  => $pName,
+                        'id_number'  => $pId,
+                        'date'       => $trip->departure_at ? \Carbon\Carbon::parse($trip->departure_at)->format('Y-m-d') : now()->format('Y-m-d'),
+                    ];
+
+                    $image    = QrCode::format('svg')->encoding('UTF-8')->size(300)->generate(json_encode($qrPayload, JSON_UNESCAPED_UNICODE));
+                    $fullPath = 'qrcodes/bookings/' . $booking->id . '/ticket_' . $bookedSeat->id . '.svg';
+
+                    Storage::disk('public')->put($fullPath, $image);
+                    $bookedSeat->update(['qr_code_path' => $fullPath]);
+                }
+
+                $trip->room_options     = $roomOptions;
+                $trip->available_seats -= count($seatsArray);
+                $trip->save();
+
+                AuditLog::create([
+                    'agency_id'      => $agentId,
+                    'trip_id'        => $trip->id,
+                    'action_type'    => $booking->is_locked ? 'lock' : 'create',
+                    'category'       => 'booking',
+                    'amount_changed' => $totalAmount,
+                    'seats_changed'  => count($seatsArray),
+                    'description'    => $booking->is_locked
+                        ? "قفل مقاعد للرحلة: ({$trip->title}) برقم حجز #{$booking->id}."
+                        : "إضافة حجز جديد للرحلة: ({$trip->title}) برقم حجز #{$booking->id}.",
+                    'operator_name'  => $this->getOperatorName(),
+                ]);
+
+                return $booking;
+            });
+
+            $message = $booking->is_locked
+                ? '🔒 تم قفل المقاعد المحددة للرحلة بنجاح عبر لوحة التحكم!'
+                : '✨ تم تسجيل وتأكيد الحجز بنجاح عبر لوحة تحكم الوكالة! رقم السجل الداخلي: #' . $booking->id;
+
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json([
+                    'status'       => 'success',
+                    'message'      => $message,
+                    'redirect_url' => route('agency.trips.index')
+                ]);
+            }
+
+            return redirect()->route('agency.trips.index')->with('success', $message);
+        } catch (\Exception $e) {
+            if ($request->ajax() || $request->wantsJson()) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => $e->getMessage()
+                ], 422);
+            }
+
+            return redirect()->back()->withInput()->with('error', $e->getMessage());
+        }
+    }
+
+    public function releaseLockedBooking($bookingId)
+    {
+        try {
+            DB::transaction(function () use ($bookingId) {
+                // 1. البحث عن الحجز برقم الحجز المباشر
+                $booking = Booking::where('id', $bookingId)->first();
+
+                // 2. إذا لم يجد الحجز، يبحث عنه عن طريق معرف المقعد أو رقم المقعد في جدول BookingSeat
+                if (!$booking) {
+                    $seat = \App\Models\BookingSeat::where('id', $bookingId)
+                        ->orWhere('seat_number', $bookingId)
+                        ->first();
+
+                    if ($seat) {
+                        $booking = $seat->booking;
+                    }
+                }
+
+                // 3. إذا تعذر العثور على الحجز بأي طريقة
+                if (!$booking) {
+                    throw new \Exception("لم يتم العثور على أي حجز مرتبك بالرقم المُرسل (#{$bookingId}).");
+                }
+
+                $trip = Trip::lockForUpdate()->findOrFail($booking->trip_id);
+
+                $roomQuantities = json_decode($booking->room_quantities, true) ?: [];
+                $roomOptions    = is_array($trip->room_options) ? $trip->room_options : (json_decode($trip->room_options, true) ?: []);
+
+                foreach ($roomQuantities as $type => $qty) {
+                    $qty = intval($qty);
+                    if ($qty > 0 && isset($roomOptions[$type])) {
+                        $roomOptions[$type]['count'] = (isset($roomOptions[$type]['count']) ? intval($roomOptions[$type]['count']) : 0) + $qty;
+                    }
+                }
+                $trip->room_options = $roomOptions;
+
+                $seatsCount = $booking->bookingSeats()->count();
+                $trip->available_seats += $seatsCount;
+                $trip->save();
+
+                foreach ($booking->bookingSeats as $seatItem) {
+                    if ($seatItem->qr_code_path && Storage::disk('public')->exists($seatItem->qr_code_path)) {
+                        Storage::disk('public')->delete($seatItem->qr_code_path);
+                    }
+                }
+
+                $booking->bookingSeats()->delete();
+                $booking->delete();
+
+                AuditLog::create([
+                    'agency_id'      => $this->getAgencyId(),
+                    'trip_id'        => $trip->id,
+                    'action_type'    => 'unlock',
+                    'category'       => 'booking',
+                    'amount_changed' => 0,
+                    'seats_changed'  => -$seatsCount,
+                    'description'    => "إلغاء قفل المقاعد وإعادتها للرحلة: ({$trip->title}) للحجز رقم #{$booking->id}.",
+                    'operator_name'  => $this->getOperatorName(),
+                ]);
+            });
+
+            return redirect()->back()->with('success', '🔓 تم إلغاء قفل المقاعد بنجاح وإعادتها للرحلة لتكون متاحة للجميع.');
+        } catch (\Exception $e) {
+            return redirect()->back()->with('error', 'حدث خطأ أثناء فك قفل المقاعد: ' . $e->getMessage());
+        }
+    }
+
+    public function deletebooking($id)
+    {
+        $agencyId = $this->getAgencyId();
+        $bookingSeat = BookingSeat::with('booking.trip')->find($id);
+
+        if (!$bookingSeat) {
+            return redirect()->back()->with('error', 'عذراً، حجز هذا المقعد غير موجود في النظام! ⚠️');
+        }
+
+        if ($agencyId && (!isset($bookingSeat->booking->trip) || $bookingSeat->booking->trip->agency_id != $agencyId)) {
+            return redirect()->back()->with('error', 'غير مصرح لك بإلغاء حجز هذا المقعد! ❌');
+        }
+
+        DB::transaction(function () use ($bookingSeat, $agencyId) {
+            $booking = $bookingSeat->booking;
+            $trip = $booking->trip;
+
+            $trip->increment('available_seats');
+
+            $totalSeatsInBooking = max(1, $booking->bookingSeats()->count());
+            $estimatedSeatPrice = floatval($booking->total_amount / $totalSeatsInBooking);
+
+            $newTotalAmount = max(0, $booking->total_amount - $estimatedSeatPrice);
+
+            AuditLog::create([
+                'agency_id'      => $agencyId,
+                'trip_id'        => $trip->id,
+                'action_type'    => 'delete',
+                'category'       => 'booking',
+                'amount_changed' => -$estimatedSeatPrice,
+                'seats_changed'  => -1,
+                'description'    => "إلغاء حجز المقعد رقم ({$bookingSeat->seat_number}) للمسافر ({$bookingSeat->passenger_name}) في الرحلة: ({$trip->title}).",
+                'operator_name'  => $this->getOperatorName(),
+            ]);
+
+            $bookingSeat->delete();
+
+            if ($totalSeatsInBooking <= 1) {
+                $booking->delete();
+            } else {
+                $booking->update([
+                    'total_amount' => $newTotalAmount
+                ]);
+            }
+        });
+
+        return redirect()->back()->with('success', 'تم إلغاء حجز المقعد بنجاح، وتحديث المبلغ الإجمالي للحجز. 🗑️');
+    }
+
+    public function updateSeat(Request $request, $id)
+    {
+        $agencyId = $this->getAgencyId();
+        $bookingSeat = BookingSeat::find($id);
+
+        if (!$bookingSeat) {
+            return redirect()->back()->with('error', 'عذراً، حجز هذا المقعد غير موجود! ⚠️');
+        }
+
+        if ($agencyId && $bookingSeat->booking->trip->agency_id != $agencyId) {
+            return redirect()->back()->with('error', 'غير مصرح لك بتعديل هذا الحجز! ❌');
+        }
+
+        $request->validate([
+            'new_seat_number' => 'required|integer|min:1',
+        ]);
+
+        $newSeatNumber = $request->input('new_seat_number');
+        $tripId = $bookingSeat->booking->trip_id;
+
+        $isSeatTaken = BookingSeat::where('seat_number', $newSeatNumber)
+            ->whereHas('booking', function ($query) use ($tripId) {
+                $query->where('trip_id', $tripId);
+            })
+            ->where('id', '!=', $id)
+            ->exists();
+
+        if ($isSeatTaken) {
+            return redirect()->back()->with('error', 'عذراً، المقعد الجديد رقم (' . $newSeatNumber . ') محجوز بالفعل لمسافر آخر في هذه الرحلة! ⚠️');
+        }
+
+        $bookingSeat->update([
+            'seat_number' => $newSeatNumber
+        ]);
+
+        return redirect()->back()->with('success', 'تم تغيير رقم مقعد المسافر بنجاح إلى المقعد (' . $newSeatNumber . ') 💺');
+    }
+
+    public function printInvoice($id)
+    {
+        $agencyId = $this->getAgencyId();
+
+        $booking = Booking::where('id', $id)
+            ->whereHas('trip', function ($query) use ($agencyId) {
+                $query->where('agency_id', $agencyId);
+            })
+            ->with(['trip', 'bookingSeats'])
+            ->firstOrFail();
+
+        return view('agency.bookings.invoice', compact('booking'));
+    }
+
+    // =========================================================================
+    // 4. ROOMS & PASSENGER DISTRIBUTION (التسكين وتوزيع الغرف المشتركة)
+    // =========================================================================
+
+    public function showshared(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+        $trips = Trip::where('agency_id', $agencyId)->latest()->get();
+        $selectedTripId = $request->input('trip_id');
+
+        $unassignedMales = collect();
+        $unassignedFemales = collect();
+        $allpeopleintrip = collect();
+        $roomsList = [];
+
+        $totalRooms = 0;
+        $totalBeds = 0;
+        $occupiedBeds = 0;
+        $availableBeds = 0;
+
+        if (!empty($selectedTripId)) {
+            $trip = Trip::where('id', $selectedTripId)
+                ->where('agency_id', $agencyId)
+                ->first();
+
+            if ($trip) {
+                $allpeopleintrip = BookingSeat::with('room')
+                    ->where('trip_id', $trip->id)
+                    ->get();
+
+                $allTripRooms = TripRoom::where('trip_id', $trip->id)->get();
+                $roomsByUid = $allTripRooms->keyBy('room_uid');
+
+                $typeToCapacity = [
+                    'single' => 1,
+                    'double' => 2,
+                    'triple' => 3,
+                    'quad'   => 4,
+                ];
+
+                $roomOptions = is_array($trip->room_options)
+                    ? $trip->room_options
+                    : (json_decode($trip->room_options, true) ?: []);
+
+                foreach ($typeToCapacity as $type => $capacity) {
+                    $expectedCount = $roomOptions[$type]['count'] ?? 0;
+
+                    for ($i = 1; $i <= $expectedCount; $i++) {
+                        $roomUid = "room_{$capacity}_{$i}";
+                        $roomObj = $roomsByUid->get($roomUid);
+
+                        $seatsInRoom = $allpeopleintrip->filter(function ($seat) use ($roomUid, $roomObj) {
+                            if ($seat->trip_room_id == $roomUid) {
+                                return true;
+                            }
+                            if ($roomObj && $seat->trip_room_id == $roomObj->id) {
+                                return true;
+                            }
+                            return false;
+                        })->values();
+
+                        $roomGender = $seatsInRoom->first()->gender ?? 'none';
+                        $displayRoomNumber = $roomObj?->room_number ?? $i;
+                        $notes = $roomObj?->notes ?? '';
+
+                        $actualType = $roomObj?->room_type ?? $type;
+                        $actualCapacity = $typeToCapacity[$actualType] ?? $capacity;
+                        $occupiedCount = $seatsInRoom->filter(fn($seat) => $seat->isActualGuest())->count();
+                        $isFull = ($occupiedCount >= $actualCapacity);
+
+                        $bookingIds = $seatsInRoom->pluck('booking_id')->filter()->unique();
+                        $isSameBooking = ($isFull && $bookingIds->count() === 1);
+
+                        $roomsList[] = (object)[
+                            'id'              => $roomObj?->id,
+                            'room_uid'        => $roomUid,
+                            'room_type'       => $actualType,
+                            'capacity'        => $actualCapacity,
+                            'occupied_count'  => $occupiedCount,
+                            'room_number'     => $displayRoomNumber,
+                            'notes'           => $notes,
+                            'gender_type'     => $roomGender,
+                            'seats'           => $seatsInRoom,
+                            'room_obj'        => $roomObj,
+                            'is_full'         => $isFull,
+                            'is_same_booking' => $isSameBooking
+                        ];
+                    }
+                }
+
+                $roomsList = collect($roomsList)->sortBy([
+                    ['is_full', 'asc'],
+                    ['occupied_count', 'desc'],
+                    ['capacity', 'asc'],
+                    ['room_number', 'asc'],
+                ])->values()->all();
+
+                $totalRooms = count($roomsList);
+                $totalBeds  = array_sum(array_column($roomsList, 'capacity'));
+
+                // تم التعديل هنا: جلب المسافرين الـ shared فقط
+                $unassignedMales = $allpeopleintrip
+                    ->whereNull('trip_room_id')
+                    ->where('gender', 'male')
+                    ->where('room_type', 'shared')
+                    ->filter(function ($seat) {
+                        return $seat->room_type !== 'blocked' && !str_contains($seat->passenger_name ?? '', 'مغلق');
+                    })
+                    ->values();
+
+                // تم التعديل هنا: جلب المسافرات الـ shared فقط
+                $unassignedFemales = $allpeopleintrip
+                    ->whereNull('trip_room_id')
+                    ->where('gender', 'female')
+                    ->where('room_type', 'shared')
+                    ->filter(function ($seat) {
+                        return $seat->room_type !== 'blocked' && !str_contains($seat->passenger_name ?? '', 'مغلق');
+                    })
+                    ->values();
+
+                $occupiedBeds  = $allpeopleintrip->whereNotNull('trip_room_id')->count();
+                $availableBeds = max(0, $totalBeds - $occupiedBeds);
+            }
+        }
+
+        $nonSharedMales = $allpeopleintrip->where('gender', 'male')->where('room_type', '!=', 'shared')->count();
+        $nonSharedFemales = $allpeopleintrip->where('gender', 'female')->where('room_type', '!=', 'shared')->count();
+
+        return view("agency.bookings.rooms", compact(
+            'trips',
+            'selectedTripId',
+            'unassignedMales',
+            'unassignedFemales',
+            'nonSharedMales',
+            'nonSharedFemales',
+            'allpeopleintrip',
+            'roomsList',
+            'totalRooms',
+            'totalBeds',
+            'occupiedBeds',
+            'availableBeds'
+        ));
+    }
+
+    public function assignPassenger(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+        $seatId = $request->input('booking_seat_id');
+        $tripRoomUid = $request->input('trip_room_id');
+        $tripId = $request->input('trip_id');
+
+        $trip = Trip::where('id', $tripId)->where('agency_id', $agencyId)->firstOrFail();
+
+        $seat = BookingSeat::where('id', $seatId)
+            ->where('trip_id', $trip->id)
+            ->whereNull('trip_room_id')
+            ->firstOrFail();
+
+        if (is_numeric($tripRoomUid)) {
+            $room = TripRoom::where('id', $tripRoomUid)
+                ->where('trip_id', $trip->id)
+                ->firstOrFail();
+        } else {
+            if (preg_match('/^room_(\d+)_(\d+)$/', $tripRoomUid, $matches)) {
+                $capacityNum = intval($matches[1]);
+                $roomNumber = intval($matches[2]);
+
+                $typeMapping = [
+                    1 => 'single',
+                    2 => 'double',
+                    3 => 'triple',
+                    4 => 'quad'
+                ];
+                $roomType = $typeMapping[$capacityNum] ?? 'single';
+            } else {
+                return redirect()->back()->with('error', 'معرف الغرفة غير صالح برمجياً.');
+            }
+
+            $room = TripRoom::firstOrCreate(
+                [
+                    'trip_id'  => $trip->id,
+                    'room_uid' => $tripRoomUid,
+                ],
+                [
+                    'room_type'   => $roomType,
+                    'room_number' => $roomNumber,
+                ]
+            );
+        }
+
+        $typeCapacityMap = [
+            'single' => 1,
+            'double' => 2,
+            'triple' => 3,
+            'quad'   => 4,
+        ];
+        $roomCapacity = $typeCapacityMap[$room->room_type] ?? 1;
+
+        $currentAllocated = BookingSeat::where('trip_id', $trip->id)
+            ->where('trip_room_id', $room->id)
+            ->get();
+
+        if ($currentAllocated->count() >= $roomCapacity) {
+            return redirect()->back()->with('error', 'عذراً، هذه الغرفة ممتلئة بالكامل ولن تستوعب أسرة إضافية!');
+        }
+
+        // if ($currentAllocated->isNotEmpty()) {
+        //     $roomGender = $currentAllocated->first()->gender;
+        //     if ($roomGender !== $seat->gender) {
+        //         return redirect()->back()->with('error', 'نظام الأمان اللوجستي: لا يمكن تسكين الرجال والنساء معاً في غرف المشاع الموحدة.');
+        //     }
+        // }
+
+        $seat->trip_room_id = $room->id;
+        $seat->save();
+
+        return redirect()->back()->with('success', "تمت عملية تسكين المسافر ({$seat->passenger_name}) بنجاح وتحديث المخطط الفندقي للرحلة.");
+    }
+
+    public function removePassenger(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+        $seatId = $request->input('booking_seat_id');
+
+        $seat = BookingSeat::findOrFail($seatId);
+
+        Trip::where('id', $seat->trip_id)->where('agency_id', $agencyId)->firstOrFail();
+
+        $seat->trip_room_id = null;
+        $seat->save();
+
+        return redirect()->back()->with('success', 'تم إخراج المسافر من الغرفة وإعادته لقائمة الانتظار.');
+    }
+
+    // =========================================================================
+    // 5. AGENCY RESOURCES (إدارة السائقين، المركبات، والحسابات البنكية)
+    // =========================================================================
+
+    public function storeDriver(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+
+        $validated = $request->validate([
+            'name'                => 'required|string|max:255',
+            'phone'               => 'required|string|max:20',
+            'national_id'         => 'required|string|unique:drivers,national_id|max:20',
+            'license_number'      => 'required|string|max:30',
+            'license_expiry_date' => 'required|date',
+        ]);
+
+        Driver::create([
+            'agency_id'           => $agencyId,
+            'name'                => $validated['name'],
+            'phone'               => $validated['phone'],
+            'national_id'         => $validated['national_id'],
+            'license_number'      => $validated['license_number'],
+            'license_expiry_date' => $validated['license_expiry_date'],
+            'status'              => 'available',
+        ]);
+
+        return redirect()->back()->with('success', 'تم تسجيل الكابتن الجديد بنجاح وانضمامه لطاقم القيادة! 🎉');
+    }
+
+    public function storeVehicle(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+
+        $validated = $request->validate([
+            'type'          => 'required|in:bus,flight',
+            'plate_number'  => 'required|string|unique:vehicles,plate_number|max:30',
+            'total_seats'   => 'required|integer|min:1',
+            'vehicle_model' => 'required|string|max:255',
+            'check_date'    => 'nullable|date',
+        ]);
+
+        Vehicle::create([
+            'agency_id'     => $agencyId,
+            'type'          => $validated['type'],
+            'plate_number'  => $validated['plate_number'],
+            'total_seats'   => $validated['total_seats'],
+            'vehicle_model' => $validated['vehicle_model'],
+            'check_date'    => $validated['check_date'],
+            'status'        => 'active',
+        ]);
+
+        return redirect()->back()->with('success', 'تم إضافة المركبة الجديدة وتثبيتها في أسطول المنصة بنجاح! 🚀');
+    }
+
+    public function storeBank(Request $request)
+    {
+        $request->validate([
+            'bank_name'      => 'required|string|max:255',
+            'account_number' => 'nullable|string|max:35',
+            'iban'           => 'required|string|max:35',
+            'qr_code'        => 'nullable|image|mimes:jpeg,png,jpg,webp|max:2048',
+        ]);
+
+        $imagePath = null;
+        if ($request->hasFile('qr_code')) {
+            $imagePath = $request->file('qr_code')->store('banks_qr', 'public');
+        }
+
+        AgencyBankAccount::create([
+            'agency_id'      => $this->getAgencyId(),
+            'bank_name'      => $request->bank_name,
+            'account_number' => $request->account_number,
+            'iban'           => $request->iban,
+            'qr_code'        => $imagePath,
+            'is_active'      => true,
+        ]);
+
+        return redirect()->back()->with('success', 'تم إضافة الحساب البنكي بنجاح ✅');
+    }
+
+    // =========================================================================
+    // 6. REPORTS & LOGS (التقارير المالية والتدقيق الحسابي)
+    // =========================================================================
+
+    public function reports(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+        $range = $request->get('range', 'month');
+
+        // ================= 1. استعلام الحجوزات حسب الفترة =================
+        $dateQuery = Booking::whereHas('trip', function ($q) use ($agencyId) {
+            $q->where('agency_id', $agencyId);
+        });
+
+        if ($range == 'week') {
+            $dateQuery->where('created_at', '>=', now()->subDays(7));
+        } elseif ($range == 'month') {
+            $dateQuery->where('created_at', '>=', now()->subDays(30));
+        }
+
+        // ================= 2. استعلام التقييمات حسب الفترة =================
+        $agencyRatingQuery = AgencyRating::where('agency_id', $agencyId);
+        if ($range == 'week') {
+            $agencyRatingQuery->where('created_at', '>=', now()->subDays(7));
+        } elseif ($range == 'month') {
+            $agencyRatingQuery->where('created_at', '>=', now()->subDays(30));
+        }
+
+        // حساب متوسط التقييم العام للفترة مع إهمال الحقول الخالية NULL
+        $ratingsList = $agencyRatingQuery->get();
+        $avgRating = $ratingsList->avg(function ($rating) {
+            $scores = array_filter([
+                $rating->transport_rating,
+                $rating->staff_rating,
+                $rating->organization_rating,
+                $rating->price_value_rating,
+                $rating->services_rating,
+                $rating->accommodation_rating,
+                $rating->meals_rating,
+            ], fn($val) => !is_null($val) && $val > 0);
+
+            return count($scores) > 0 ? array_sum($scores) / count($scores) : null;
+        });
+
+        // ================= 3. جلب السائقين والمركبات والكادر =================
+        $drivers  = Driver::where('agency_id', $agencyId)->get();
+        $vehicles = Vehicle::where('agency_id', $agencyId)->get();
+        // جلب الكادر التابع للوكالة
+        $staffMembers = Staff::where('agency_id', $agencyId)->get();
+        // ================= 4. تجميع الإحصائيات الشاملة =================
+        $stats = (object)[
+            'total_revenue'       => (clone $dateQuery)->where('status', 'confirmed')->sum('total_amount'),
+            'net_revenue'         => (clone $dateQuery)->whereIn('status', ['approved', 'confirmed'])->sum('agency_amount'),
+            'total_bookings'      => (clone $dateQuery)->where('status', 'confirmed')->withCount('bookingSeats')->get()->sum('booking_seats_count'),
+            'pending_amount'      => (clone $dateQuery)->where('status', 'pending')->sum('total_amount'),
+            'compliance_rate'     => 100,
+            'average_rating'      => number_format($avgRating ?? 0, 1),
+
+            // إحصائيات السائقين والمركبات
+            'total_drivers'       => $drivers->count(),
+            'active_drivers'      => $drivers->where('status', 'active')->count(),
+            'total_vehicles'      => $vehicles->count(),
+            'active_vehicles'     => $vehicles->where('status', 'active')->count(),
+            'total_vehicle_seats' => $vehicles->sum('total_seats'),
+        ];
+
+        // ================= 5. جلب الرحلات الأخيرة وتقييماتها ومواردها =================
+        // تم إضافة (driver, vehicle, staff) لتقليل عدد الاستعلامات داخل العرض
+        $tripsQuery = Trip::where('agency_id', $agencyId)
+            ->with(['ratings.user', 'bookings', 'driver', 'vehicle', 'staff']);
+
+        if ($range == 'week') {
+            $tripsQuery->where('created_at', '>=', now()->subDays(7));
+        } elseif ($range == 'month') {
+            $tripsQuery->where('created_at', '>=', now()->subDays(30));
+        }
+
+        $recent_transactions = $tripsQuery->latest()->take(10)->get()->map(function ($trip) {
+            $ratings = $trip->ratings;
+
+            // حساب صافي المستحق للوكالة المباشر من الحجوزات المقبولة/المؤكدة
+            $agencyAmountSum = $trip->bookings
+                ->whereIn('status', ['approved', 'confirmed'])
+                ->sum('agency_amount');
+
+            $avgRating = $ratings->avg(function ($r) {
+                $scores = array_filter([
+                    $r->transport_rating,
+                    $r->staff_rating,
+                    $r->organization_rating,
+                    $r->price_value_rating,
+                    $r->services_rating,
+                    $r->accommodation_rating,
+                    $r->meals_rating
+                ], fn($val) => !is_null($val) && $val > 0);
+
+                return count($scores) > 0 ? array_sum($scores) / count($scores) : null;
+            });
+
+            return [
+                'id'             => $trip->id,
+                'type'           => $trip->title ?? 'رحلة نقل',
+                'departure_at'   => $trip->departure_at ? $trip->departure_at->format('Y-m-d') : $trip->created_at->format('Y-m-d'),
+                'amount'         => $trip->bookings->sum('total_amount'),
+                'agency_amount'  => $agencyAmountSum,
+                'ratings_count'  => $ratings->count(),
+                'average_rating' => round($avgRating ?? 0, 1),
+                'ratings'        => $ratings,
+                'driver'         => $trip->driver,
+                'vehicle'        => $trip->vehicle,
+                'staff'          => $trip->staff,
+                'raw_trip'       => $trip,
+            ];
+        });
+
+        // ================= 6. بيانات الرسم البياني =================
+        $chartTrips = Trip::where('agency_id', $agencyId)->latest()->take(6)->get();
+        $chartLabels = $chartTrips->pluck('title')->toArray();
+        $chartSoldData = [];
+        $chartTotalData = [];
+
+        foreach ($chartTrips as $trip) {
+            $sold = Booking::where('trip_id', $trip->id)->where('status', 'confirmed')
+                ->withCount('bookingSeats')->get()->sum('booking_seats_count');
+            $chartSoldData[] = $sold ?: 0;
+            $chartTotalData[] = $trip->bus_seats ?? 50;
+        }
+
+        // ================= 7. إرجاع العرض ومشاركة المتغيرات =================
+        return view('agency.trips.reports', compact(
+            'stats',
+            'recent_transactions',
+            'chartLabels',
+            'chartSoldData',
+            'chartTotalData',
+            'range',
+            'drivers',
+            'vehicles',
+            'staffMembers'
+
+        ));
+    }
+
+    public function auditLogsIndex(Request $request)
+    {
+        $agencyId = $this->getAgencyId();
+        $query = AuditLog::where('agency_id', $agencyId)->with('trip');
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('description', 'like', "%{$search}%")
+                    ->orWhere('operator_name', 'like', "%{$search}%");
+            });
+        }
+
+        if ($request->filled('category')) {
+            $query->where('category', $request->category);
+        }
+
+        if ($request->filled('action_type')) {
+            $query->where('action_type', $request->action_type);
+        }
+
+        if ($request->filled('trip_id')) {
+            $query->where('trip_id', $request->trip_id);
+        }
+
+        $totalMoneyFlow = (clone $query)->sum('amount_changed');
+        $totalSeatsFlow = (clone $query)->sum('seats_changed');
+
+        $logs = $query->latest()->paginate(15);
+
+        $trips = Trip::where('agency_id', $agencyId)
+            ->select('id', 'title')
+            ->latest()
+            ->get();
+
+        return view('agency.reports.audit', compact('logs', 'totalMoneyFlow', 'totalSeatsFlow', 'trips'));
+    }
+}
