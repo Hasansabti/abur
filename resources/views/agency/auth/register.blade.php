@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>إنشاء حساب وكالة جديد | عبور</title>
     <meta name="description" content="@yield('meta_description', 'منصة عبور هي البوابة الرائدة لإدارة حجز الرحلات والوكالات، سجل وكالتك الآن لتتمكن من إدارة وتتبع رحلاتك وحجوزاتك بكل سهولة وأمان.')">
-
+    <link rel="icon" type="image/jpeg" href="{{ asset('images/DF.jpeg') }}">
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
