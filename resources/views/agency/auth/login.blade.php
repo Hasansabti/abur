@@ -92,6 +92,15 @@
         <div
             class="bg-white/90 backdrop-blur-md p-6 sm:p-10 md:p-12 rounded-3xl shadow-2xl shadow-indigo-950/5 border border-white/60 relative">
 
+            <!-- زر الرجوع للصفحة السابقة -->
+            <button type="button" onclick="goBack()"
+                class="absolute top-4 right-4 sm:top-6 sm:right-6 inline-flex items-center gap-1.5 text-sm font-bold text-slate-500 hover:text-indigo-600 bg-slate-100/80 hover:bg-indigo-50 px-3 py-2 rounded-xl transition-all duration-200 active:scale-95 focus:outline-none focus:ring-4 focus:ring-indigo-100">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path>
+                </svg>
+                رجوع
+            </button>
+
             <!-- الهيدر والشعار -->
             <div class="text-center mb-6 sm:mb-8 relative">
                 <div
@@ -230,6 +239,14 @@
 </body>
 
 <script>
+    function goBack() {
+        if (document.referrer && window.history.length > 1) {
+            window.history.back();
+        } else {
+            window.location.href = "{{ url('/') }}";
+        }
+    }
+
     function openForgotModal() {
         document.getElementById('forgotPasswordModal').classList.remove('hidden');
     }
