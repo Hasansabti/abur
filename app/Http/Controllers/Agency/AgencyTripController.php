@@ -65,7 +65,7 @@ class AgencyTripController extends Controller
 
         return 'نظام الوكالة الآلي';
     }
-    //عرض الرحلات 
+    //عرض الرحلات
     public function indexTrip(Request $request)
     {
         $agencyId = $this->getAgencyId();
@@ -369,6 +369,7 @@ class AgencyTripController extends Controller
             'room_options'                             => ['nullable', 'array'],
             'room_options.*.price'                     => ['nullable', 'numeric', 'min:0'],
             'room_options.*.count'                     => ['nullable', 'integer', 'min:0'],
+            'room_options.*.shared'                    => ['nullable', 'boolean'],
             'room_options.*.packages'                  => ['nullable', 'array'],
             'room_options.*.packages.*.name'           => ['nullable', 'string', 'max:255'],
             'room_options.*.packages.*.price'          => ['nullable', 'numeric', 'min:0'],
@@ -488,10 +489,14 @@ class AgencyTripController extends Controller
             $processedRooms[$type] = [
                 'price'    => (float) ($request->input("room_options.{$type}.price") ?? 0.0),
                 'count'    => (int) ($request->input("room_options.{$type}.count") ?? 0),
+                'shared'   => !empty($data['allows_shared_rooms']) && $request->boolean("room_options.{$type}.shared"),
                 'packages' => $roomPackages
             ];
         }
         $data['room_options'] = $processedRooms;
+        if (!$isDraft && ($sharedError = $this->sharedRoomsError($processedRooms, (bool) $data['allows_shared_rooms']))) {
+            return redirect()->back()->withInput()->withErrors(['room_options' => $sharedError]);
+        }
 
         // بناء هيكل JSON الوجبات العامة
         $data['meal_options'] = [
@@ -662,6 +667,7 @@ class AgencyTripController extends Controller
             'room_options'                                 => ['nullable', 'array'],
             'room_options.*.price'                         => ['nullable', 'numeric', 'min:0'],
             'room_options.*.count'                         => ['nullable', 'integer', 'min:0'],
+            'room_options.*.shared'                        => ['nullable', 'boolean'],
             'room_options.*.packages'                      => ['nullable', 'array'],
             'room_options.*.packages.*.name'               => ['nullable', 'string', 'max:255'],
             'room_options.*.packages.*.price'              => ['nullable', 'numeric', 'min:0'],
@@ -796,10 +802,14 @@ class AgencyTripController extends Controller
             $processedRooms[$type] = [
                 'price'    => (float) ($request->input("room_options.{$type}.price") ?? 0.0),
                 'count'    => (int) ($request->input("room_options.{$type}.count") ?? 0),
+                'shared'   => !empty($data['allows_shared_rooms']) && $request->boolean("room_options.{$type}.shared"),
                 'packages' => $roomPackages
             ];
         }
         $data['room_options'] = $processedRooms;
+        if (!$isDraft && ($sharedError = $this->sharedRoomsError($processedRooms, (bool) $data['allows_shared_rooms']))) {
+            return redirect()->back()->withInput()->withErrors(['room_options' => $sharedError]);
+        }
 
         $data['meal_options'] = [
             'individual' => [
@@ -905,6 +915,30 @@ class AgencyTripController extends Controller
 
         return redirect()->route('agency.dashboard')->with('success', $actionMsg);
     }
+    /**
+ * إذا فعّلت الوكالة الغرف المشتركة لازم تحدد نوعاً واحداً على الأقل، وبسعر.
+ */
+private function sharedRoomsError(array $rooms, bool $allowsShared): ?string
+{
+    if (!$allowsShared) {
+        return null;
+    }
+
+    $labels   = ['single' => 'الفردية', 'double' => 'الثنائية', 'triple' => 'الثلاثية', 'quad' => 'الرباعية'];
+    $selected = array_keys(array_filter($rooms, fn($r) => !empty($r['shared'])));
+
+    if (empty($selected)) {
+        return 'فعّلت الغرف المشتركة، حدد نوع غرفة واحد على الأقل متاحاً للمشاركة.';
+    }
+
+    foreach ($selected as $type) {
+        if (($rooms[$type]['price'] ?? 0) <= 0) {
+            return 'حدد سعراً للغرفة ' . ($labels[$type] ?? $type) . ' قبل تفعيلها كغرفة مشتركة.';
+        }
+    }
+
+    return null;
+}
     /**
      * إنشاء/تحديث الباص الثاني الاحتياطي بناءً على بيانات الرحلة الأم.
      * - إذا الباص الثاني تفعّل وصار فيه حجوزات: ما نلمسه (نحمي أسعار وحجوزات الركاب).
@@ -1128,7 +1162,7 @@ class AgencyTripController extends Controller
         return view('agency.trips.create', compact('trip', 'drivers', 'vehicles'));
     }
 
-    //صفحة طلبات خاصة 
+    //صفحة طلبات خاصة
     public function indexPrivateTrip(Request $request)
     {
         // افترضنا أن الوكالة المسجلة دخلت عبر Auth أو مرتبط حسابها بـ auth()->user()->agency_id

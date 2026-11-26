@@ -169,7 +169,7 @@
         // ----- المفاتيح داخل قسم السكن -----
         $toggles = [
             [
-                'allows_shared_rooms',
+                'تفعيل هذا الخيار يسمح للعملاء بحجز أسِرّة منفردة داخل غرفة مشتركة. حدد أنواع الغرف المتاحة للمشاركة من بطاقات الغرف أعلاه.',
                 'sharedRooms',
                 '👥',
                 'bg-indigo-50 text-indigo-600',
@@ -865,6 +865,19 @@
                                     class="w-full mt-3 py-2 border border-dashed border-slate-300 rounded-xl text-[10px] font-bold text-slate-500 hover:text-blue-600 hover:border-blue-300 transition-colors">
                                     ➕ إضافة باقة وجبات
                                 </button>
+                            </div>
+                            {{-- متاحة للمشاركة (تظهر فقط لو فعّلت الغرف المشتركة) --}}
+                            <div x-show="sharedRooms" x-transition class="mt-3">
+                                <input type="hidden" name="room_options[{{ $key }}][shared]" value="0"
+                                    :disabled="!sharedRooms">
+                                <label
+                                    class="flex items-center gap-2 px-3 py-2 rounded-xl border border-indigo-100 bg-indigo-50/50 cursor-pointer hover:bg-indigo-50 transition-colors">
+                                    <input type="checkbox" name="room_options[{{ $key }}][shared]"
+                                        value="1" :disabled="!sharedRooms"
+                                        class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                                        {{ old("room_options.$key.shared", $roomOptions[$key]['shared'] ?? false) ? 'checked' : '' }}>
+                                    <span class="text-[10px] font-black text-indigo-700">👥 متاحة للمشاركة</span>
+                                </label>
                             </div>
                         </div>
                     @endforeach

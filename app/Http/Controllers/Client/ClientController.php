@@ -1010,6 +1010,7 @@ class ClientController extends Controller
                 'prefilledRoomBedTypes'      => $prefilledRoomBedTypes,
                 'prefilledAgencyNote'      => $prefilledAgencyNote,
                 'bedTypeOptions'      => $bedTypeOptions,
+                'shared_room_types' => $this->sharedRoomTypesOf($trip),
 
 
             ], 200, [], JSON_UNESCAPED_UNICODE);
@@ -1155,6 +1156,8 @@ class ClientController extends Controller
                 $roomAssignments   = $this->safeJsonParse($request->input('room_assignments'));
                 $passengerMeals    = $this->safeJsonParse($request->input('passenger_meals'));
                 $passengerServices = $this->safeJsonParse($request->input('passenger_services'));
+
+                $this->assertSharedRoomsAllowed($trip, $roomAssignments);
 
                 // --- [ الترتيب التلقائي للمقاعد ] ---
                 $originalSeatsArray = $seatsArray;
@@ -1719,6 +1722,47 @@ class ClientController extends Controller
         }
         return [];
     }
+    /** أنواع الغرف اللي حددتها الوكالة كمتاحة للمشاركة */
+private function sharedRoomTypesOf(Trip $trip): array
+{
+    return collect($this->safeJsonParse($trip->room_options))
+        ->filter(fn($r) => is_array($r) && !empty($r['shared']))
+        ->keys()
+        ->map(fn($k) => strtolower((string) $k))
+        ->values()
+        ->all();
+}
+
+/** السيرفر هو المرجع: ما يُقبل تسكين مشترك في نوع غرفة لم تسمح به الوكالة */
+private function assertSharedRoomsAllowed(Trip $trip, array $roomAssignments): void
+{
+    $allowed = $this->sharedRoomTypesOf($trip);
+    $labels  = ['single' => 'الفردية', 'double' => 'الثنائية', 'triple' => 'الثلاثية', 'quad' => 'الرباعية'];
+
+    foreach ($roomAssignments as $label) {
+        if (is_array($label)) {
+            $label = $label['unique_label'] ?? $label['room_label'] ?? $label['label'] ?? $label['room_type'] ?? $label['type'] ?? '';
+        }
+        $label = strtolower(trim((string) $label));
+
+        if ($label === '' || !str_contains($label, 'shared')) {
+            continue;
+        }
+
+        if (!$trip->allows_shared_rooms) {
+            throw new \DomainException('عذراً، هذه الرحلة لا تدعم الغرف المشتركة.');
+        }
+
+        // رحلات قديمة ما حددت فيها الوكالة أنواعاً: يبقى السلوك القديم
+        if (empty($allowed)) {
+            continue;
+        }
+
+        if (preg_match('/(single|double|triple|quad)/', $label, $m) && !in_array($m[1], $allowed, true)) {
+            throw new \DomainException('عذراً، الغرفة ' . $labels[$m[1]] . ' غير متاحة كغرفة مشتركة في هذه الرحلة.');
+        }
+    }
+}
 
     /**
      * استخراج الوجبة أو الخدمة المخصصة للمسافر برقم المقعد أو الفهرس

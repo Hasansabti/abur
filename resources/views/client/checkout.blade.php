@@ -148,14 +148,31 @@
             'quint' => 'خماسية',
         ];
 
-        $activeRoomType = null;
-        foreach ($roomQuantitiesArray as $qType => $qQty) {
-            if (intval($qQty) > 0) {
-                $activeRoomType = $qType;
-                break;
-            }
+// الأنواع اللي حددتها الوكالة كمتاحة للمشاركة
+$sharedAllowedKeys = collect($room_options)
+    ->filter(fn($r) => is_array($r) && !empty($r['shared']))
+    ->keys()
+    ->map(fn($k) => strtolower((string) $k))
+    ->values()
+    ->all();
+
+if (count($sharedAllowedKeys) === 1) {
+    // نوع واحد فقط مسموح: اسم الغرفة المشتركة يعرض نوعها
+    $defaultTypeArabic = $typeArabicMap[$sharedAllowedKeys[0]] ?? '';
+} elseif (count($sharedAllowedKeys) > 1) {
+    // أكثر من نوع: نعرض "غرفة مشتركة" بدون نوع إلا لو كان النوع مكتوباً في التسمية نفسها
+    $defaultTypeArabic = '';
+} else {
+    // رحلات قديمة بدون تحديد: السلوك السابق
+    $activeRoomType = null;
+    foreach ($roomQuantitiesArray as $qType => $qQty) {
+        if (intval($qQty) > 0) {
+            $activeRoomType = $qType;
+            break;
         }
-        $defaultTypeArabic = $typeArabicMap[$activeRoomType] ?? '';
+    }
+    $defaultTypeArabic = $typeArabicMap[$activeRoomType] ?? '';
+}
 
         $seatRoomMapping = [];
 
@@ -294,14 +311,14 @@
         paymentMethod: '{{ old('payment_method', 'card') }}',
         selectedBank: null,
         fileName: '',
-    
+
         selectedSeats: @js($seatsArray),
         passengerNames: @js($namesArray),
         passengerGenders: @js($gendersArray),
         passengerIds: @js($idsArray),
         passengerMeals: @js($finalPassengerMeals),
         passengerServices: @js($passengerServicesArray),
-    
+
         mealPrices: {
             breakfast: {{ $mealOptionsArray['individual']['breakfast']['price'] ?? ($trip->breakfast_price ?? 0) }},
             lunch: {{ $mealOptionsArray['individual']['lunch']['price'] ?? ($trip->lunch_price ?? 0) }},
@@ -311,7 +328,7 @@
             bf_dn: {{ $mealOptionsArray['packages']['bf_dn'] ?? ($trip->price_bf_dn ?? 0) }},
             all_meals: {{ $mealOptionsArray['packages']['all'] ?? ($trip->price_all_meals ?? 0) }}
         },
-    
+
         roomPackages: [
             @foreach (['single', 'double', 'triple', 'quad', 'quint'] as $type)
                 @if (!empty($room_options[$type]['packages']))
@@ -320,15 +337,15 @@
             @endif
             @endforeach
         ],
-    
+
         calculateMeals() {
             let totalIndividual = 0;
             let totalWithCombo = 0;
-    
+
             let mealsList = Array.isArray(this.passengerMeals) ? this.passengerMeals : Object.values(this.passengerMeals);
             mealsList.forEach(meal => {
                 if (!meal || !meal.wants_meal) return;
-    
+
                 if (meal.package_name) {
                     let pkgPrice = parseFloat(meal.package_price || 0);
                     if (pkgPrice <= 0) {
@@ -341,17 +358,17 @@
                         return;
                     }
                 }
-    
+
                 let hasBf = !!meal.breakfast;
                 let hasLn = !!meal.lunch;
                 let hasDn = !!meal.dinner;
-    
+
                 let individualSum = (hasBf ? this.mealPrices.breakfast : 0) +
                     (hasLn ? this.mealPrices.lunch : 0) +
                     (hasDn ? this.mealPrices.dinner : 0);
                 totalIndividual += individualSum;
                 let finalPrice = individualSum;
-    
+
                 if (hasBf && hasLn && hasDn) {
                     finalPrice = this.mealPrices.all_meals > 0 ? this.mealPrices.all_meals : individualSum;
                 } else if (hasBf && hasLn) {
@@ -361,19 +378,19 @@
                 } else if (hasBf && hasDn) {
                     finalPrice = this.mealPrices.bf_dn > 0 ? this.mealPrices.bf_dn : individualSum;
                 }
-    
+
                 totalWithCombo += Number(finalPrice);
             });
-    
+
             let discount = totalIndividual - totalWithCombo;
-    
+
             return {
                 subtotal: totalIndividual,
                 finalTotal: totalWithCombo,
                 discountAmount: discount > 0 ? discount : 0
             };
         },
-    
+
         banks: [
             @if(!empty($trip->bank_accounts) && is_array($trip->bank_accounts))
             @foreach($trip->bank_accounts as $bank) {
@@ -698,8 +715,8 @@
                                 class="w-full py-5 text-white font-black rounded-[1.5rem] transition-all flex items-center justify-center gap-3 text-base">
 
                                 <span
-                                    x-text="paymentMethod === 'card' 
-            ? 'الانتقال لصفحة الدفع الفوري' 
+                                    x-text="paymentMethod === 'card'
+            ? 'الانتقال لصفحة الدفع الفوري'
             : 'إتمام الحجز وتأكيد الطلب'"></span>
                                 <span class="text-xl">🚀</span>
                             </button>

@@ -1,5 +1,17 @@
 @extends('layouts.client')
 
+@php
+    $__rooms = is_array($trip->room_options)
+        ? $trip->room_options
+        : (json_decode($trip->room_options ?? '[]', true) ?:
+        []);
+    $sharedAllowedTypes = collect($__rooms)
+        ->filter(fn($r) => is_array($r) && !empty($r['shared']))
+        ->keys()
+        ->map(fn($k) => strtolower((string) $k))
+        ->values()
+        ->all();
+@endphp
 @section('content')
     <div class="container mx-auto px-4 py-10 max-w-6xl" x-data="tripBookingApp({
         showRoomModal: false,
@@ -14,28 +26,29 @@
         selfUid: null,
         sharedRoomTypes: {},
         allowExtraSeat: @js((bool) ($trip->allow_to_add_seat ?? false)),
-    
+        sharedAllowedTypes: @js($sharedAllowedTypes),
+
         bedTypeOptions: @js($bedTypeOptions ?? (object) []),
         prefilledRoomBedTypes: @js($prefilledRoomBedTypes ?? (object) []),
         prefilledAgencyNote: @js($prefilledAgencyNote ?? ''),
-    
+
         // --- الحقول الصحيحة المطابقة للموديل ---
         isConditional: @js((bool) $trip->is_conditional),
         minSeatsRequired: parseInt(@js($trip->min_seats_required ?? 0)) || 0,
         conditionalDeadline: @js($trip->threshold_deadline_at),
         bookedSeats: @js($booked_seats ?? []),
         // -------------------------------------
-    
+
         draftExpiresAt: null,
         timeLeftFormatted: '',
         draftTimer: null,
-    
+
         roomOptionsRaw: @js($trip->room_options ?? []),
         mealOptionsRaw: @js($trip->meal_options ?? []),
-    
+
         serviceOptionsRaw: @js($trip->extra_services ?? []),
         selectedServices: [],
-    
+
         companions: @js($companions ?? []),
         extra_services: {{ json_encode($trip->extra_services) }},
         roomPrices: @js($trip->room_prices ?? []),
@@ -49,9 +62,9 @@
         tripId: '{{ $trip->id }}',
         accommodationOnlyDiscount: parseFloat(@js($trip->accommodation_only_discount)) || 0,
         totalSeats: parseInt(@js($trip->total_seats)) || 49,
-    
-        
-    
+
+
+
         // 🟢 البيانات المحملة مسبقاً للحجز السابق
         existingBookingId: @js($existingBooking->id ?? null),
         prefilledSeats: @js($prefilledSeats ?? []),
@@ -572,13 +585,10 @@
         {{-- 🛌 نافذة اختيار نوع السرير للغرفة المضافة حديثاً --}}
         {{-- (خارج div الخطوة 1 عمداً حتى لا يتأثر موضعها بالـ transform) --}}
         {{-- ========================================== --}}
-        <div x-data="{ bedModalOpen: false, bedModalUid: null }"
-            @open-bed-type-modal.window="bedModalUid = $event.detail.uid; bedModalOpen = true"
-            @keydown.escape.window="bedModalOpen = false"
-            x-show="bedModalOpen" x-cloak style="display: none;"
-            x-transition:enter="transition ease-out duration-200"
-            x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
-            x-transition:leave="transition ease-in duration-150"
+        <div x-data="{ bedModalOpen: false, bedModalUid: null }" @open-bed-type-modal.window="bedModalUid = $event.detail.uid; bedModalOpen = true"
+            @keydown.escape.window="bedModalOpen = false" x-show="bedModalOpen" x-cloak style="display: none;"
+            x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0"
+            x-transition:enter-end="opacity-100" x-transition:leave="transition ease-in duration-150"
             x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0"
             class="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md"
             @click="bedModalOpen = false">
@@ -885,13 +895,13 @@
                 {{-- زر التالي --}}
                 <button
                     @click="
-            if(getPassengerUids().length > 100) { 
-                alert('الرجاء تقليل عدد المسافرين إلى 100 كحد أقصى للمتابعة.'); 
-            } else if(getPassengerUids().length === 0) { 
-                alert('يرجى إضافة مسافر واحد على الأقل للمتابعة.'); 
-            } else { 
-                step = 3; 
-                window.scrollTo({ top: 0, behavior: 'smooth' }); 
+            if(getPassengerUids().length > 100) {
+                alert('الرجاء تقليل عدد المسافرين إلى 100 كحد أقصى للمتابعة.');
+            } else if(getPassengerUids().length === 0) {
+                alert('يرجى إضافة مسافر واحد على الأقل للمتابعة.');
+            } else {
+                step = 3;
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
          "
                     :disabled="getPassengerUids().length > 100 || getPassengerUids().length === 0"
@@ -1225,8 +1235,8 @@
                                                     if (selectedUnassigned) {
                                                         let passGender = passengerGenders[selectedUnassigned];
                                                         let isAuto = {{ $isAutoSplit ? 'true' : 'false' }};
-                                                        let isFemZone = {{ $isFemaleZone ? 'true' : 'false' }};       
-                                                    
+                                                        let isFemZone = {{ $isFemaleZone ? 'true' : 'false' }};
+
                                                         if (isAuto && passGender === 'male' && isFemZone) {
                                                             alertMessage = '⚠️ عذراً، لا يمكن تسكين مسافر (ذكر) في القسم المخصص للسيدات.';
                                                             showAlertModal = true;
@@ -1309,8 +1319,8 @@
                                                 : '';
                                         @endphp
                                         <button type="button"
-                                            @if ($isBooked) @click="showBookedError = true" 
-                                    @else 
+                                            @if ($isBooked) @click="showBookedError = true"
+                                    @else
                                         @click="
                                             if (selectedUnassigned) {
                                                 if (passengerSeats[selectedUnassigned] && passengerSeats[selectedUnassigned].length >= 2 && !passengerSeats[selectedUnassigned].includes({{ $i }})) {
@@ -1659,7 +1669,7 @@
 
                 <template x-if="activeModalSeat !== null">
                     <div class="flex flex-col flex-1 overflow-hidden relative z-10" x-data="{ showValidation: false }"
-                        x-effect="if (activeModalSeat !== null) { 
+                        x-effect="if (activeModalSeat !== null) {
             showValidation = false;
             if (typeof passengerMeals === 'undefined' || !passengerMeals) passengerMeals = {};
             if (typeof passengerNames === 'undefined' || !passengerNames) passengerNames = {};
@@ -1668,12 +1678,12 @@
             if (typeof seatRoomAssignments === 'undefined' || !seatRoomAssignments) seatRoomAssignments = {};
             if (typeof sharedRoomTypes === 'undefined' || !sharedRoomTypes) sharedRoomTypes = {};
 
-            if (!(activeModalSeat in passengerMeals)) passengerMeals = { ...passengerMeals, [activeModalSeat]: { wants_meal: false, breakfast: false, lunch: false, dinner: false, package_name: null, package_price: 0 } }; 
-            if (!(activeModalSeat in passengerNames)) passengerNames = { ...passengerNames, [activeModalSeat]: '' }; 
-            if (!(activeModalSeat in passengerIds)) passengerIds = { ...passengerIds, [activeModalSeat]: '' }; 
-            if (!(activeModalSeat in passengerGenders)) passengerGenders = { ...passengerGenders, [activeModalSeat]: '' }; 
-            if (!(activeModalSeat in seatRoomAssignments)) seatRoomAssignments = { ...seatRoomAssignments, [activeModalSeat]: '' }; 
-            if (!(activeModalSeat in sharedRoomTypes)) sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: '' }; 
+            if (!(activeModalSeat in passengerMeals)) passengerMeals = { ...passengerMeals, [activeModalSeat]: { wants_meal: false, breakfast: false, lunch: false, dinner: false, package_name: null, package_price: 0 } };
+            if (!(activeModalSeat in passengerNames)) passengerNames = { ...passengerNames, [activeModalSeat]: '' };
+            if (!(activeModalSeat in passengerIds)) passengerIds = { ...passengerIds, [activeModalSeat]: '' };
+            if (!(activeModalSeat in passengerGenders)) passengerGenders = { ...passengerGenders, [activeModalSeat]: '' };
+            if (!(activeModalSeat in seatRoomAssignments)) seatRoomAssignments = { ...seatRoomAssignments, [activeModalSeat]: '' };
+            if (!(activeModalSeat in sharedRoomTypes)) sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: '' };
          }">
 
                         <div
@@ -1835,7 +1845,13 @@
 
                                         @if ($trip->allows_shared_rooms)
                                             <button type="button"
-                                                @click="seatRoomAssignments = { ...seatRoomAssignments, [activeModalSeat]: seatRoomAssignments?.[activeModalSeat] === 'shared' ? null : 'shared' }"
+                                                @click="
+    const wasShared = seatRoomAssignments?.[activeModalSeat] === 'shared';
+    seatRoomAssignments = { ...seatRoomAssignments, [activeModalSeat]: wasShared ? null : 'shared' };
+    if (!wasShared && sharedAllowedTypes.length === 1) {
+        sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: sharedAllowedTypes[0] };
+    }
+"
                                                 :class="seatRoomAssignments?.[activeModalSeat] === 'shared' ?
                                                     'border-indigo-600 bg-indigo-50/80 text-indigo-700 shadow-sm' :
                                                     'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
@@ -1851,7 +1867,8 @@
                                                 </label>
 
                                                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                                    <template x-for="type in getAvailableSharedRoomTypes()"
+                                                    <template
+                                                        x-for="type in getAvailableSharedRoomTypes().filter(t => sharedAllowedTypes.length === 0 || sharedAllowedTypes.includes(String(t.id).toLowerCase()))"
                                                         :key="type.id">
                                                         <button type="button"
                                                             @click="sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: type.id }"
@@ -2096,9 +2113,9 @@
                         </div>
 
                         <div x-show="showValidation && (
-                    !(passengerNames[activeModalSeat] || '').trim() || 
-                    ((passengerIds[activeModalSeat] || '').trim().length !== 10) || 
-                    !(passengerGenders[activeModalSeat] || '').trim() || 
+                    !(passengerNames[activeModalSeat] || '').trim() ||
+                    ((passengerIds[activeModalSeat] || '').trim().length !== 10) ||
+                    !(passengerGenders[activeModalSeat] || '').trim() ||
                     (!seatRoomAssignments[activeModalSeat] || seatRoomAssignments[activeModalSeat] === '') ||
                     (seatRoomAssignments[activeModalSeat] === 'shared' && !(typeof sharedRoomTypes !== 'undefined' && sharedRoomTypes && sharedRoomTypes[activeModalSeat]))
                  )"
