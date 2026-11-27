@@ -43,6 +43,8 @@ class BookingSeat extends Model
         'bed_type',
         'extra_bed_quantity',
         'extra_bed_unit_price',
+        'shared_room_type',
+
     ];
 
     protected function casts(): array
