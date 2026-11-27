@@ -17,6 +17,30 @@ function bookingManager(config) {
         companions: config.companions || [],
         sharedRoomTypes: {},
 
+        // ✅ أنواع الغرف المسموح مشاركتها (كانت تُرسل من الـ Blade لكن لا تُقرأ هنا أبداً)
+        // المصدر الأول: ما أرسله السيرفر، والاحتياطي: علامة shared داخل room_options نفسها
+        sharedAllowedTypes: (() => {
+            const valid = ['single', 'double', 'triple', 'quad'];
+            let list = config.sharedAllowedTypes;
+            if (list && !Array.isArray(list) && typeof list === 'object') list = Object.values(list);
+
+            if (Array.isArray(list) && list.length > 0) {
+                return list.map(t => String(t).toLowerCase()).filter(t => valid.includes(t));
+            }
+
+            let raw = config.roomOptionsRaw;
+            if (typeof raw === 'string') {
+                try { raw = JSON.parse(raw); } catch (e) { raw = {}; }
+            }
+            if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+                return Object.keys(raw)
+                    .filter(k => raw[k] && (raw[k].shared === true || raw[k].shared === 1 || raw[k].shared === '1'))
+                    .map(k => String(k).toLowerCase())
+                    .filter(t => valid.includes(t));
+            }
+            return [];
+        })(),
+
         draftExpiresAt: null,
         timeLeftFormatted: '',
         draftTimer: null,
@@ -183,60 +207,31 @@ function bookingManager(config) {
                 this.isAdditionalSeat = newAdd;
             }
         },
+
+        // ✅ أنواع الغرف المتاحة للمشاركة: فقط ما حدده المنظم في الرحلة (shared = true)
+        // (سابقاً كانت تعتمد على الغرف الخاصة المحجوزة في السلة، فتظهر أنواع غير مسموح مشاركتها)
         getAvailableSharedRoomTypes() {
-            // 1. التصفية بناءً على الغرف المحجوزة في السلة (إن وجدت)
-            if (Array.isArray(this.bookedRoomsList) && this.bookedRoomsList.length > 0) {
-                const foundMap = new Map();
-                const capToType = { 1: 'single', 2: 'double', 3: 'triple', 4: 'quad' };
+            const valid = ['single', 'double', 'triple', 'quad'];
+            let types = Array.isArray(this.sharedAllowedTypes) ? [...this.sharedAllowedTypes] : [];
 
-                this.bookedRoomsList.forEach(rm => {
-                    const uid = rm.uid || '';
-                    let cap = rm.capacity ? parseInt(rm.capacity, 10) : 0;
-
-                    // تحديد معرّف النوع بناءً على السعة أو المعرف uid
-                    let typeId = capToType[cap];
-                    if (!typeId) {
-                        if (uid.includes('single')) typeId = 'single';
-                        else if (uid.includes('triple')) typeId = 'triple';
-                        else if (uid.includes('quad')) typeId = 'quad';
-                        else typeId = 'double';
-                    }
-
-                    if (!foundMap.has(typeId)) {
-                        foundMap.set(typeId, {
-                            id: typeId,
-                            name: this.getTypeName?.(typeId) || this.getDefaultTypeName(typeId)
-                        });
-                    }
-                });
-
-                // إرجاع النتيجة إذا تم العثور على أنواع مطابقة، وإلا يتم الانتقال للخطوة التالية
-                if (foundMap.size > 0) {
-                    return Array.from(foundMap.values());
-                }
+            // رحلات قديمة لم تحدد أنواعاً للمشاركة: نعرض الأنواع التي لها سعر
+            if (types.length === 0 && this.roomOptions && typeof this.roomOptions === 'object') {
+                types = Object.entries(this.roomOptions)
+                    .filter(([_, opt]) => opt && Number(opt.price) > 0)
+                    .map(([key]) => String(key).toLowerCase());
             }
 
-            // 2. الجلب من إعدادات الرحلة الأصلية (roomOptions)
-            if (this.roomOptions && typeof this.roomOptions === 'object') {
-                const available = Object.entries(this.roomOptions)
-                    .filter(([_, opt]) => opt && (Number(opt.count) > 0 || Number(opt.price) > 0))
-                    .map(([typeKey]) => ({
-                        id: typeKey,
-                        name: this.getTypeName?.(typeKey) || this.getDefaultTypeName(typeKey)
-                    }));
+            if (types.length === 0) types = [...valid];
 
-                if (available.length > 0) {
-                    return available;
-                }
-            }
+            return types
+                .filter(t => valid.includes(t))
+                .map(t => ({ id: t, name: this.getTypeName?.(t) || this.getDefaultTypeName(t) }));
+        },
 
-            // 3. الخيار الافتراضي في حال عدم وجود أي تقييد في الإعدادات
-            return [
-                { id: 'single', name: 'فردية' },
-                { id: 'double', name: 'ثنائية' },
-                { id: 'triple', name: 'ثلاثية' },
-                { id: 'quad', name: 'رباعية' }
-            ];
+        // هل نوع الغرفة المشتركة هذا مسموح؟
+        isSharedTypeAllowed(typeId) {
+            if (!typeId) return false;
+            return this.getAvailableSharedRoomTypes().some(t => t.id === String(typeId).toLowerCase());
         },
 
         // دالة مساعدة لضمان إرجاع الاسم العربي في حال لم تكن getTypeName متوفرة
@@ -595,8 +590,10 @@ function bookingManager(config) {
             const genderValid = gender.length > 0;
             const roomValid = room !== null && room !== '';
 
-            // التحقق من صحة الغرفة المشتركة (يجب أن تحتوي على قيمة إذا كان السكن 'shared')
-            const sharedTypeValid = room === 'shared' ? (sharedType !== null && sharedType !== '') : true;
+            // التحقق من صحة الغرفة المشتركة (يجب أن تحتوي على نوع مسموح مشاركته إذا كان السكن 'shared')
+            const sharedTypeValid = room === 'shared'
+                ? (sharedType !== null && sharedType !== '' && this.isSharedTypeAllowed(sharedType))
+                : true;
 
             // إضافة sharedTypeValid لشرط المنع
             if (!nameValid || !idValid || !genderValid || !roomValid || !sharedTypeValid) {
@@ -605,7 +602,7 @@ function bookingManager(config) {
                 else if (!idValid) this.triggerAlert('⚠️ يرجى إدخال رقم هوية صحيح مكون من 10 أرقام.');
                 else if (!genderValid) this.triggerAlert('⚠️ يرجى تحديد جنس المسافر (ذكر / أنثى).');
                 else if (!roomValid) this.triggerAlert('⚠️ يجب اختيار سكن للمسافر قبل الحفظ.');
-                else if (!sharedTypeValid) this.triggerAlert('⚠️ يرجى تحديد نوع الغرفة المشتركة.'); // التنبيه المخصص
+                else if (!sharedTypeValid) this.triggerAlert('⚠️ يرجى تحديد نوع الغرفة المشتركة من الأنواع المتاحة للمشاركة.'); // التنبيه المخصص
                 return;
             }
 
@@ -913,11 +910,13 @@ function bookingManager(config) {
             }
 
             let defOptions = {
-                single: { price: 0, count: 0, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
-                double: { price: 0, count: 0, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
-                triple: { price: 0, count: 0, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
-                quad: { price: 0, count: 0, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
+                single: { price: 0, count: 0, shared: false, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
+                double: { price: 0, count: 0, shared: false, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
+                triple: { price: 0, count: 0, shared: false, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
+                quad: { price: 0, count: 0, shared: false, meals: { breakfast: 0, lunch: 0, dinner: 0 }, packages: [] },
             };
+
+            const isTrue = v => v === true || v === 1 || v === '1' || v === 'true';
 
             if (Array.isArray(options)) {
                 options.forEach(opt => {
@@ -925,6 +924,7 @@ function bookingManager(config) {
                     if (key && defOptions.hasOwnProperty(key)) {
                         defOptions[key].price = parseFloat(opt.price) || 0;
                         defOptions[key].count = parseInt(opt.count || opt.qty || opt.available) || 0;
+                        defOptions[key].shared = isTrue(opt.shared);
                         defOptions[key].packages = opt.packages || [];
                         if (opt.meals) {
                             defOptions[key].meals.breakfast = parseFloat(opt.meals.breakfast) || 0;
@@ -938,6 +938,7 @@ function bookingManager(config) {
                     if (defOptions.hasOwnProperty(key)) {
                         defOptions[key].price = parseFloat(options[key].price) || 0;
                         defOptions[key].count = parseInt(options[key].count || 0) || 0;
+                        defOptions[key].shared = isTrue(options[key].shared);
                         defOptions[key].packages = options[key].packages || [];
                         if (options[key].meals) {
                             defOptions[key].meals.breakfast = parseFloat(options[key].meals.breakfast) || 0;
@@ -1207,73 +1208,8 @@ function bookingManager(config) {
             }
             return s;
         },
+
         // --- 7. حساب المبالغ والإجمالي ---
-        // totalSavings() {
-        //     let savings = 0;
-        //     this.selectedSeats.forEach(seat => {
-        //         const meals = this.passengerMeals[seat];
-        //         if (!meals || !meals.wants_meal) return;
-
-        //         const hasBf = !!meals.breakfast;
-        //         const hasLn = !!meals.lunch;
-        //         const hasDn = !!meals.dinner;
-
-        //         let breakfastPrice = this.getMealPrice(seat, 'breakfast');
-        //         let lunchPrice = this.getMealPrice(seat, 'lunch');
-        //         let dinnerPrice = this.getMealPrice(seat, 'dinner');
-
-        //         let regularPrice = (hasBf ? breakfastPrice : 0) + (hasLn ? lunchPrice : 0) + (hasDn ? dinnerPrice : 0);
-        //         let actualPrice = regularPrice;
-
-        //         if (meals.package_name) {
-        //             actualPrice = parseFloat(meals.package_price) || 0;
-        //         } else {
-        //             if (hasBf && hasLn && hasDn && this.mealPackages.all !== null) {
-        //                 actualPrice = this.mealPackages.all;
-        //             } else if (hasBf && hasLn && this.mealPackages.bf_ln !== null) {
-        //                 actualPrice = this.mealPackages.bf_ln;
-        //             } else if (hasLn && hasDn && this.mealPackages.ln_dn !== null) {
-        //                 actualPrice = this.mealPackages.ln_dn;
-        //             } else if (hasBf && hasDn && this.mealPackages.bf_dn !== null) {
-        //                 actualPrice = this.mealPackages.bf_dn;
-        //             }
-        //         }
-        //         savings += Math.max(0, regularPrice - actualPrice);
-        //     });
-        //     return savings;
-        // },
-
-        // get totalMealsPrice() {
-        //     let total = 0;
-        //     for (let seat in this.passengerMeals) {
-        //         let mealData = this.passengerMeals[seat];
-        //         if (!mealData || !mealData.wants_meal) continue;
-
-        //         if (mealData.package_name) {
-        //             total += parseFloat(mealData.package_price) || 0;
-        //         } else {
-        //             let hasBf = !!mealData.breakfast;
-        //             let hasLn = !!mealData.lunch;
-        //             let hasDn = !!mealData.dinner;
-
-        //             if (hasBf && hasLn && hasDn && this.mealPackages.all !== null) {
-        //                 total += this.mealPackages.all;
-        //             } else if (hasBf && hasLn && this.mealPackages.bf_ln !== null) {
-        //                 total += this.mealPackages.bf_ln;
-        //             } else if (hasLn && hasDn && this.mealPackages.ln_dn !== null) {
-        //                 total += this.mealPackages.ln_dn;
-        //             } else if (hasBf && hasDn && this.mealPackages.bf_dn !== null) {
-        //                 total += this.mealPackages.bf_dn;
-        //             } else {
-        //                 if (hasBf) total += this.getMealPrice(seat, 'breakfast');
-        //                 if (hasLn) total += this.getMealPrice(seat, 'lunch');
-        //                 if (hasDn) total += this.getMealPrice(seat, 'dinner');
-        //             }
-        //         }
-        //     }
-        //     return total;
-        // },
-
         get totalServicesPrice() {
             let total = 0;
             if (!this.serviceOptionsRaw || !this.passengerServices) return 0;
@@ -1490,6 +1426,16 @@ function bookingManager(config) {
                         this.isEmptySeat = draft.isEmptySeat || {};
                         this.sharedRoomTypes = draft.sharedRoomTypes || {};
                         this.isAdditionalSeat = draft.isAdditionalSeat || {};
+
+                        // ✅ مسودة قديمة قد تحوي نوع غرفة مشتركة لم يعد مسموحاً: نفرّغه ليختار المستخدم من جديد
+                        if (Object.keys(this.sharedRoomTypes).length > 0) {
+                            const cleaned = {};
+                            Object.keys(this.sharedRoomTypes).forEach(k => {
+                                const t = this.sharedRoomTypes[k];
+                                if (this.isSharedTypeAllowed(t)) cleaned[k] = t;
+                            });
+                            this.sharedRoomTypes = cleaned;
+                        }
 
                         this.roomBedTypes = draft.roomBedTypes || this.roomBedTypes;
                         this.agencyNote = draft.agencyNote ?? this.agencyNote;
@@ -1775,6 +1721,15 @@ function bookingManager(config) {
                 if (String(seat).startsWith('H') && (seatRoom === 'shared' || !seatRoom)) {
                     this.triggerAlert(`خطأ: المسافر المخصص للسكن فقط (${seat}) لم يتم تسكينه في غرفة.`);
                     return;
+                }
+
+                // ✅ التحقق من نوع الغرفة المشتركة: يجب أن يكون محدداً ومن الأنواع المسموح مشاركتها
+                if (seatRoom === 'shared') {
+                    const sType = getPassengerAttr(seat, this.sharedRoomTypes);
+                    if (!sType || !this.isSharedTypeAllowed(sType)) {
+                        this.triggerAlert(`⚠️ يرجى تحديد نوع الغرفة المشتركة للمسافر (${pName}) من الأنواع المتاحة للمشاركة.`);
+                        return;
+                    }
                 }
             }
 

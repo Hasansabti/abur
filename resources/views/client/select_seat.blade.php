@@ -6,7 +6,7 @@
         : (json_decode($trip->room_options ?? '[]', true) ?:
         []);
     $sharedAllowedTypes = collect($__rooms)
-        ->filter(fn($r) => is_array($r) && !empty($r['shared']))
+        ->filter(fn($r) => is_array($r) && filter_var($r['shared'] ?? false, FILTER_VALIDATE_BOOLEAN))
         ->keys()
         ->map(fn($k) => strtolower((string) $k))
         ->values()
@@ -1458,8 +1458,9 @@
                     </div>
 
                     <!-- خصم حجز السكن فقط -->
+                    {{-- ✅ إصلاح: كان وسم الـ div هنا بدون علامة إغلاق ">" فيكسر ما بعده --}}
                     <div class="flex justify-between items-center text-xs pt-2 border-t border-dashed border-emerald-200"
-                        x-show="getPassengerUids().filter(s => String(s).startsWith('H')).length > 0 && accommodationOnlyDiscount > 0"
+                        x-show="getPassengerUids().filter(s => String(s).startsWith('H')).length > 0 && accommodationOnlyDiscount > 0">
                         <span class="text-emerald-700 font-bold flex items-center gap-1">🏨 خصم حجز السكن فقط:</span>
                         <span
                             class="font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100"
@@ -1848,8 +1849,13 @@
                                                 @click="
     const wasShared = seatRoomAssignments?.[activeModalSeat] === 'shared';
     seatRoomAssignments = { ...seatRoomAssignments, [activeModalSeat]: wasShared ? null : 'shared' };
-    if (!wasShared && sharedAllowedTypes.length === 1) {
-        sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: sharedAllowedTypes[0] };
+    if (!wasShared) {
+        const allowedNow = getAvailableSharedRoomTypes();
+        if (allowedNow.length === 1) {
+            sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: allowedNow[0].id };
+        } else if (!isSharedTypeAllowed(sharedRoomTypes?.[activeModalSeat])) {
+            sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: '' };
+        }
     }
 "
                                                 :class="seatRoomAssignments?.[activeModalSeat] === 'shared' ?
@@ -1866,9 +1872,9 @@
                                                     حدد نوع الغرفة المشتركة: <span class="text-red-500">*</span>
                                                 </label>
 
+                                                {{-- ✅ تظهر فقط أنواع الغرف التي حددها المنظم كمتاحة للمشاركة --}}
                                                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                                                    <template
-                                                        x-for="type in getAvailableSharedRoomTypes().filter(t => sharedAllowedTypes.length === 0 || sharedAllowedTypes.includes(String(t.id).toLowerCase()))"
+                                                    <template x-for="type in getAvailableSharedRoomTypes()"
                                                         :key="type.id">
                                                         <button type="button"
                                                             @click="sharedRoomTypes = { ...sharedRoomTypes, [activeModalSeat]: type.id }"
